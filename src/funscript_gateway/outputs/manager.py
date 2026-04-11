@@ -16,13 +16,9 @@ from funscript_gateway.models import (
 from funscript_gateway.outputs.tasmota import TasmotaDriver
 from funscript_gateway.outputs.threshold import ThresholdSwitchProcessor
 
-logger = logging.getLogger(__name__)
+from funscript_gateway.outputs.mqtt import MqttDriver
 
-try:
-    import aiomqtt
-    _AIOMQTT_AVAILABLE = True
-except ImportError:
-    _AIOMQTT_AVAILABLE = False
+logger = logging.getLogger(__name__)
 
 _EVAL_INTERVAL_S = 0.050  # 20 Hz
 
@@ -35,9 +31,7 @@ class OutputManager:
         self._engine = engine
         self._running = False
         self._task: asyncio.Task | None = None
-        # key: (broker_host, broker_port) -> aiomqtt.Client context
-        self._mqtt_clients: dict[tuple[str, int], object] = {}
-        self._mqtt_status_tasks: list[asyncio.Task] = []
+        self._mqtt_drivers: list[MqttDriver] = []
         self._was_connected: bool = False
 
     async def start(self) -> None:
@@ -47,7 +41,6 @@ class OutputManager:
 
     async def stop(self) -> None:
         self._running = False
-        # Apply on_disconnect behavior before shutting down.
         await self._handle_disconnect()
         if self._task is not None:
             self._task.cancel()
@@ -56,32 +49,21 @@ class OutputManager:
             except (asyncio.CancelledError, Exception):
                 pass
             self._task = None
-        # Cancel status subscription tasks.
-        for t in self._mqtt_status_tasks:
-            t.cancel()
-        self._mqtt_status_tasks.clear()
-        # Exit MQTT client contexts.
-        for client in self._mqtt_clients.values():
-            try:
-                await client.__aexit__(None, None, None)
-            except Exception:  # noqa: BLE001
-                pass
-        self._mqtt_clients.clear()
+        await self._disconnect_mqtt_drivers()
 
     async def reload_outputs(self) -> None:
         """Rebuild all output instances from the current config (called after UI changes)."""
-        # Clean up existing MQTT subscriptions and connections before rebuilding.
-        for t in self._mqtt_status_tasks:
-            t.cancel()
-        self._mqtt_status_tasks.clear()
-        for client in self._mqtt_clients.values():
-            try:
-                await client.__aexit__(None, None, None)
-            except Exception:  # noqa: BLE001
-                pass
-        self._mqtt_clients.clear()
+        await self._disconnect_mqtt_drivers()
         await self._setup_outputs()
         self._app_state.outputs_updated.emit()
+
+    async def _disconnect_mqtt_drivers(self) -> None:
+        for driver in self._mqtt_drivers:
+            try:
+                await driver.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+        self._mqtt_drivers.clear()
 
     async def _setup_outputs(self) -> None:
         """Instantiate all OutputInstance objects from app_state.config.outputs."""
@@ -104,28 +86,18 @@ class OutputManager:
             case "threshold_tasmota":
                 return TasmotaDriver(cfg.tasmota)
             case "threshold_mqtt":
-                if not _AIOMQTT_AVAILABLE:
+                driver = MqttDriver(cfg.mqtt)
+                try:
+                    await driver.connect()
+                    self._mqtt_drivers.append(driver)
+                    return driver
+                except Exception as exc:  # noqa: BLE001
                     logger.warning(
-                        "Output '%s' skipped: aiomqtt not available.", cfg.name
+                        "Output '%s': MQTT connection failed (%s); "
+                        "output will be inactive until reload.",
+                        cfg.name, exc,
                     )
                     return None
-                key = (cfg.mqtt.broker_host, cfg.mqtt.broker_port)
-                if key not in self._mqtt_clients:
-                    kwargs = dict(port=cfg.mqtt.broker_port)
-                    if cfg.mqtt.username:
-                        kwargs["username"] = cfg.mqtt.username
-                    if cfg.mqtt.password:
-                        kwargs["password"] = cfg.mqtt.password
-                    client = aiomqtt.Client(cfg.mqtt.broker_host, **kwargs)
-                    await client.__aenter__()
-                    self._mqtt_clients[key] = client
-                client = self._mqtt_clients[key]
-                from funscript_gateway.outputs.mqtt import MqttDriver
-                driver = MqttDriver(cfg.mqtt, client)
-                if cfg.mqtt.status_topic:
-                    task = asyncio.ensure_future(driver.run_status_subscription())
-                    self._mqtt_status_tasks.append(task)
-                return driver
             case _:
                 logger.warning("Unknown output type '%s' for '%s'.", cfg.type, cfg.name)
                 return None

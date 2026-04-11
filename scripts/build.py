@@ -40,7 +40,11 @@ def main() -> None:
         str(BUILD_DIR),
         # Hidden imports for packages that PyInstaller may not detect automatically.
         "--hidden-import",
-        "aiomqtt",
+        "paho",
+        "--hidden-import",
+        "paho.mqtt",
+        "--hidden-import",
+        "paho.mqtt.client",
         "--hidden-import",
         "qasync",
         "--hidden-import",
