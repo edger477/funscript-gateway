@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import urllib.error
+import urllib.request
 from typing import Callable
-
-import aiohttp
 
 from funscript_gateway.models import MediaConnectionState, PlayerState
 
@@ -24,6 +24,9 @@ class MpcHcBackend:
 
     Polls /variables.html at a configurable interval and extracts state
     via regex. Position is returned in milliseconds by MPC-HC.
+
+    Uses asyncio.to_thread + urllib to avoid event-loop socket compatibility
+    issues on Windows (qasync / ProactorEventLoop).
     """
 
     def __init__(
@@ -41,20 +44,20 @@ class MpcHcBackend:
 
     async def connect(self) -> None:
         """Poll MPC-HC indefinitely until cancelled."""
-        async with aiohttp.ClientSession() as session:
-            logger.info("MPC-HC polling %s", self._url)
-            while True:
-                try:
-                    async with session.get(
-                        self._url, timeout=aiohttp.ClientTimeout(total=2.0)
-                    ) as resp:
-                        body = await resp.text(encoding="utf-8", errors="replace")
-                    state = self._parse_response(body)
-                    self._on_state_change(state)
-                except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-                    logger.debug("MPC-HC poll error: %s", exc)
-                    raise
-                await asyncio.sleep(self._poll_interval_s)
+        logger.info("MPC-HC polling %s", self._url)
+        while True:
+            try:
+                body = await asyncio.to_thread(self._fetch)
+                state = self._parse_response(body)
+                self._on_state_change(state)
+            except (urllib.error.URLError, OSError, TimeoutError) as exc:
+                logger.debug("MPC-HC poll error: %s", exc)
+                raise
+            await asyncio.sleep(self._poll_interval_s)
+
+    def _fetch(self) -> str:
+        with urllib.request.urlopen(self._url, timeout=2.0) as resp:
+            return resp.read().decode("utf-8", errors="replace")
 
     async def disconnect(self) -> None:
         pass

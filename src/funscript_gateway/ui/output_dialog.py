@@ -177,6 +177,13 @@ class OutputDialog(QDialog):
         self._mqtt_broker_port.setValue(cfg.broker_port)
         form.addRow("Broker port:", self._mqtt_broker_port)
 
+        self._mqtt_username = QLineEdit(cfg.username)
+        form.addRow("Username:", self._mqtt_username)
+
+        self._mqtt_password = QLineEdit(cfg.password)
+        self._mqtt_password.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Password:", self._mqtt_password)
+
         self._mqtt_command_topic = QLineEdit(cfg.command_topic)
         form.addRow("Command topic:", self._mqtt_command_topic)
 
@@ -219,6 +226,8 @@ class OutputDialog(QDialog):
         mqtt = MqttOutputConfig(
             broker_host=self._mqtt_broker_host.text().strip(),
             broker_port=self._mqtt_broker_port.value(),
+            username=self._mqtt_username.text().strip(),
+            password=self._mqtt_password.text(),
             command_topic=self._mqtt_command_topic.text().strip(),
             payload_on=self._mqtt_payload_on.text(),
             payload_off=self._mqtt_payload_off.text(),

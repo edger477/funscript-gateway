@@ -42,8 +42,6 @@ def main() -> None:
         "--hidden-import",
         "aiomqtt",
         "--hidden-import",
-        "aiohttp",
-        "--hidden-import",
         "qasync",
         "--hidden-import",
         "PySide6.QtCore",

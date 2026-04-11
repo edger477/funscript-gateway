@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 
-import aiohttp
-
 from funscript_gateway.app_state import AppState
 from funscript_gateway.funscript.engine import FunscriptEngine, interpolate
 from funscript_gateway.models import (
@@ -37,7 +35,6 @@ class OutputManager:
         self._engine = engine
         self._running = False
         self._task: asyncio.Task | None = None
-        self._http_session: aiohttp.ClientSession | None = None
         # key: (broker_host, broker_port) -> aiomqtt.Client context
         self._mqtt_clients: dict[tuple[str, int], object] = {}
         self._mqtt_status_tasks: list[asyncio.Task] = []
@@ -45,7 +42,6 @@ class OutputManager:
 
     async def start(self) -> None:
         self._running = True
-        self._http_session = aiohttp.ClientSession()
         await self._setup_outputs()
         self._task = asyncio.ensure_future(self._evaluation_loop())
 
@@ -71,9 +67,6 @@ class OutputManager:
             except Exception:  # noqa: BLE001
                 pass
         self._mqtt_clients.clear()
-        if self._http_session is not None:
-            await self._http_session.close()
-            self._http_session = None
 
     async def reload_outputs(self) -> None:
         """Rebuild all output instances from the current config (called after UI changes)."""
@@ -109,7 +102,7 @@ class OutputManager:
     async def _create_driver(self, cfg: OutputConfig) -> object | None:
         match cfg.type:
             case "threshold_tasmota":
-                return TasmotaDriver(cfg.tasmota, self._http_session)
+                return TasmotaDriver(cfg.tasmota)
             case "threshold_mqtt":
                 if not _AIOMQTT_AVAILABLE:
                     logger.warning(
@@ -118,9 +111,12 @@ class OutputManager:
                     return None
                 key = (cfg.mqtt.broker_host, cfg.mqtt.broker_port)
                 if key not in self._mqtt_clients:
-                    client = aiomqtt.Client(
-                        cfg.mqtt.broker_host, port=cfg.mqtt.broker_port
-                    )
+                    kwargs = dict(port=cfg.mqtt.broker_port)
+                    if cfg.mqtt.username:
+                        kwargs["username"] = cfg.mqtt.username
+                    if cfg.mqtt.password:
+                        kwargs["password"] = cfg.mqtt.password
+                    client = aiomqtt.Client(cfg.mqtt.broker_host, **kwargs)
                     await client.__aenter__()
                     self._mqtt_clients[key] = client
                 client = self._mqtt_clients[key]

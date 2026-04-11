@@ -60,6 +60,8 @@ def _output_from_dict(d: dict) -> OutputConfig:
     mqtt = MqttOutputConfig(
         broker_host=mqtt_d.get("broker_host", ""),
         broker_port=int(mqtt_d.get("broker_port", 1883)),
+        username=mqtt_d.get("username", ""),
+        password=mqtt_d.get("password", ""),
         command_topic=mqtt_d.get("command_topic", ""),
         payload_on=mqtt_d.get("payload_on", "ON"),
         payload_off=mqtt_d.get("payload_off", "OFF"),
@@ -160,6 +162,8 @@ def _output_to_dict(output: OutputConfig) -> dict:
         "mqtt": {
             "broker_host": output.mqtt.broker_host,
             "broker_port": output.mqtt.broker_port,
+            "username": output.mqtt.username,
+            "password": output.mqtt.password,
             "command_topic": output.mqtt.command_topic,
             "payload_on": output.mqtt.payload_on,
             "payload_off": output.mqtt.payload_off,

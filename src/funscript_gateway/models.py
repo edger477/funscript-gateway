@@ -67,6 +67,8 @@ class TasmotaOutputConfig:
 class MqttOutputConfig:
     broker_host: str = ""
     broker_port: int = 1883
+    username: str = ""
+    password: str = ""
     command_topic: str = ""
     payload_on: str = "ON"
     payload_off: str = "OFF"
