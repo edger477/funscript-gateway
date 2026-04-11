@@ -1,7 +1,7 @@
 # funscript-gateway — Technical Specification
 
-**Version:** 0.1  
-**Date:** 2026-04-10  
+**Version:** 0.1.1  
+**Date:** 2026-04-11  
 **Status:** Draft
 
 ---
@@ -80,8 +80,8 @@ Device Drivers
 | Language | Python 3.11+ | asyncio maturity, ecosystem for HTTP/MQTT, rapid development |
 | GUI framework | PySide6 (Qt 6) | Native system tray support, cross-platform, good async integration |
 | Event loop | `asyncio` + `qasync` | Bridges Qt event loop with asyncio; allows `async/await` throughout |
-| HTTP client | `aiohttp` | Async HTTP for MPC-HC polling and Tasmota API calls |
-| MQTT client | `aiomqtt` (wraps `paho-mqtt`) | Async MQTT; falls back to `paho-mqtt` if preferred |
+| HTTP client | `urllib.request` (stdlib) via `asyncio.to_thread` | Avoids aiohttp's `add_reader`/`add_writer` calls, which are not implemented on Windows `ProactorEventLoop` |
+| MQTT client | `paho-mqtt` threaded loop (`loop_start`/`loop_stop`) | paho manages its own network thread; no asyncio socket integration, fully compatible with Windows `ProactorEventLoop` |
 | Config format | TOML (`tomllib` stdlib + `tomli_w`) | Human-readable, stdlib read support in Python 3.11+ |
 | Packaging | `pyproject.toml` + optional PyInstaller | Single-binary distribution for Windows |
 
@@ -92,11 +92,17 @@ Device Drivers
 dependencies = [
     "PySide6>=6.6",
     "qasync>=0.27",
-    "aiohttp>=3.9",
-    "aiomqtt>=2.0",
+    "paho-mqtt>=1.6",
     "tomli_w>=1.0",   # TOML write (stdlib only covers read in 3.11)
 ]
 ```
+
+### Windows ProactorEventLoop compatibility note
+
+`qasync` on Windows wraps `ProactorEventLoop`, which does **not** implement `add_reader` or `add_writer`. Any library that calls these (including `aiohttp` and `aiomqtt`/`paho-mqtt` in asyncio mode) will raise `NotImplementedError` at runtime. The solution used throughout this project is:
+
+- **HTTP** (`TasmotaDriver`, `MpcHcBackend`): blocking `urllib.request` calls wrapped with `asyncio.to_thread`.
+- **MQTT** (`MqttDriver`): paho-mqtt's own background network thread (`loop_start`/`loop_stop`), which does not touch the asyncio event loop's socket layer.
 
 No third-party funscript or player-protocol libraries are used. All protocol handling is implemented directly, following the restim reference.
 
@@ -515,10 +521,11 @@ The driver sends commands only when the desired state differs from the last succ
 **Implementation sketch:**
 
 ```python
+import urllib.request
+
 class TasmotaDriver:
-    def __init__(self, config: TasmotaOutputConfig, session: aiohttp.ClientSession):
+    def __init__(self, config: TasmotaOutputConfig) -> None:
         self.config = config
-        self._session = session
         self._last_sent: bool | None = None
 
     async def set_state(self, on: bool) -> None:
@@ -529,16 +536,21 @@ class TasmotaDriver:
             f"http://{self.config.host}/cm"
             f"?cmnd=Power{self.config.device_index}%20{cmd}"
         )
-        async with self._session.get(url, timeout=self.config.timeout_s) as resp:
-            if resp.status == 200:
-                self._last_sent = on
+        timeout = self.config.timeout_s
+
+        def do_request() -> None:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                resp.read()
+
+        await asyncio.to_thread(do_request)
+        self._last_sent = on
 ```
 
-On HTTP error, `_last_sent` is not updated, so the next evaluation cycle will retry.
+`asyncio.to_thread` offloads the blocking `urllib.request` call to a thread pool worker, keeping the asyncio event loop unblocked. On HTTP error the exception propagates to the evaluation loop, `_last_sent` is not updated, and the next cycle will retry.
 
 ### 6.4 MQTT Switch Driver
 
-The `MqttDriver` publishes on/off messages to an MQTT broker.
+The `MqttDriver` publishes on/off messages to an MQTT broker using paho-mqtt's threaded network loop.
 
 **Configuration:**
 
@@ -546,12 +558,26 @@ The `MqttDriver` publishes on/off messages to an MQTT broker.
 |-------|------|---------|-------------|
 | `broker_host` | str | — | MQTT broker hostname or IP |
 | `broker_port` | int | `1883` | MQTT broker port |
+| `username` | str | `""` | Broker username (empty = anonymous) |
+| `password` | str | `""` | Broker password |
 | `command_topic` | str | — | Topic to publish commands to |
 | `payload_on` | str | `"ON"` | Payload string for the on state |
 | `payload_off` | str | `"OFF"` | Payload string for the off state |
 | `status_topic` | str | `""` | Optional topic to subscribe for state confirmation |
 | `qos` | int | `0` | MQTT QoS level (0, 1, or 2) |
 | `retain` | bool | `False` | Whether to set the MQTT retain flag |
+
+**Lifecycle:**
+
+Each `MqttDriver` owns one `paho.mqtt.client.Client` instance. The lifecycle is:
+
+```
+await driver.connect()    # blocks in asyncio.to_thread until connected (10 s timeout)
+await driver.set_state()  # thread-safe publish via paho's internal queue (non-blocking)
+await driver.disconnect() # stops background thread, disconnects
+```
+
+`connect()` calls `client.loop_start()`, which starts paho's own background network thread. This thread handles all socket I/O independently of the asyncio event loop — no `add_reader`/`add_writer` calls are made.
 
 **Publish logic:**
 
@@ -561,49 +587,26 @@ class MqttDriver:
         if on == self._last_sent:
             return
         payload = self.config.payload_on if on else self.config.payload_off
-        await self._client.publish(
+        result = self._client.publish(
             self.config.command_topic,
             payload,
             qos=self.config.qos,
             retain=self.config.retain,
         )
+        if result.rc != paho.MQTT_ERR_SUCCESS:
+            raise RuntimeError(f"MQTT publish error rc={result.rc}")
         self._last_sent = on
 ```
 
-If `status_topic` is configured, the driver subscribes to it on startup and updates an internal `_confirmed_state` attribute when a matching payload is received. This confirmed state is surfaced in the UI for monitoring purposes but does not affect command logic.
+`paho.publish()` is thread-safe: it queues the message internally and the background thread sends it. The call returns immediately.
 
-A single shared `aiomqtt.Client` instance is used per MQTT broker (keyed by host:port) to avoid redundant connections when multiple outputs target the same broker.
+**Status topic:**
 
-**aiomqtt 2.x API notes:**
+If `status_topic` is configured, the driver subscribes on connect via `on_connect` callback and updates an internal `_confirmed_state: bool | None` attribute when a matching payload is received via `on_message`. This state is available for UI monitoring but does not affect command logic.
 
-aiomqtt 2.x changed significantly from 1.x. All code must target the 2.x API:
+**Connection failure handling:**
 
-```python
-# ✅ 2.x: Client is an async context manager; keep it alive for app lifetime
-async with aiomqtt.Client(broker_host, port=broker_port) as client:
-    await client.publish("topic", "ON", qos=0, retain=False)
-
-# ❌ 1.x pattern (does not exist in 2.x):
-client = aiomqtt.Client(...)
-await client.connect()          # no connect() method
-await client.publish(...)
-await client.disconnect()
-```
-
-For status topic subscriptions, message iteration uses an async generator in 2.x:
-
-```python
-async with aiomqtt.Client(host, port=port) as client:
-    await client.subscribe(status_topic)
-    async for message in client.messages:
-        payload = message.payload.decode()
-        if payload == self.config.payload_on:
-            self._confirmed_state = True
-        elif payload == self.config.payload_off:
-            self._confirmed_state = False
-```
-
-Because `aiomqtt.Client` is a context manager, the shared-client-per-broker pattern requires the client to be entered once at `OutputManager` startup and exited on shutdown. The `MqttDriver` instances receive a reference to the already-entered client — they do not manage its lifecycle. If the broker connection drops, `aiomqtt` raises `aiomqtt.MqttError`; the `OutputManager` catches this, marks all MQTT outputs degraded, and attempts reconnection with exponential backoff (initial 1 s, max 30 s).
+If the broker is unreachable, `connect()` waits up to 10 seconds for `on_connect` to fire. On timeout, `loop_stop()` is called and a `ConnectionError` is raised. The `OutputManager` catches this, logs a warning, and leaves the output inactive (driver set to `None`). The output will remain inactive until the user triggers a reload via the UI.
 
 ### 6.5 Output Evaluation Loop
 
@@ -623,11 +626,20 @@ async def _evaluation_loop(self) -> None:
             if not output.config.enabled:
                 continue
 
-            axis = self._resolve_axis(output.config.axis_name)
-            if axis is None or not axis.enabled:
+            if output.driver is None:
                 continue
 
-            if is_playing:
+            axis = self._resolve_axis(output.config.axis_name)
+            axis_available = (
+                axis is not None and axis.enabled and not axis.file_missing
+            )
+
+            if not axis_available:
+                forced = self._handle_missing_axis_behavior(output)
+                if forced is None:
+                    continue  # hold
+                new_state = forced
+            elif is_playing:
                 new_state = output.processor.process(axis.current_value)
                 output.last_input_value = axis.current_value
             else:
@@ -665,6 +677,12 @@ async def _evaluation_loop(self) -> None:
 ```python
 def _handle_pause_behavior(self, output: OutputInstance) -> bool | None:
     match output.config.on_pause:
+        case "force_off": return False
+        case "force_on":  return True
+        case "hold":      return None   # caller skips driver call
+
+def _handle_missing_axis_behavior(self, output: OutputInstance) -> bool | None:
+    match output.config.on_missing_axis:
         case "force_off": return False
         case "force_on":  return True
         case "hold":      return None   # caller skips driver call
@@ -892,11 +910,12 @@ Displays all configured outputs. Updated at the 20 Hz loop tick.
 - **Remove selected** — removes the selected output
 
 **Output configuration dialog** is a two-panel form:
-1. Left panel: output name, axis selection (dropdown of loaded axes), on-pause behavior, on-disconnect behavior.
+1. Left panel: output name, axis selection (dropdown of loaded axes), enabled checkbox, on-pause behavior, on-disconnect behavior, on-missing-axis behavior.
 2. Right panel: tabbed sub-form for threshold config and device driver config (Tasmota or MQTT).
 
 `on_pause` dropdown options: `hold` (default), `force_off`, `force_on`.
 `on_disconnect` dropdown options: `force_off` (default), `hold`, `force_on`.
+`on_missing_axis` dropdown options: `force_off` (default), `hold`, `force_on`.
 
 ### 8.6 Settings Tab
 
@@ -1000,6 +1019,8 @@ class TasmotaOutputConfig:
 class MqttOutputConfig:
     broker_host: str = ""
     broker_port: int = 1883
+    username: str = ""                 # empty string = anonymous
+    password: str = ""
     command_topic: str = ""
     payload_on: str = "ON"
     payload_off: str = "OFF"
@@ -1069,7 +1090,7 @@ class AppState(QObject):
 
 ### Player Not Reachable
 
-- `PlayerConnectionManager` catches `ConnectionRefusedError`, `asyncio.TimeoutError`, and `aiohttp.ClientError`.
+- `PlayerConnectionManager` catches `ConnectionRefusedError`, `asyncio.TimeoutError`, `urllib.error.URLError`, and `OSError`.
 - Transitions state to `NOT_CONNECTED`.
 - Waits 5 seconds, then retries.
 - No crash, no user prompt — status tab reflects the disconnected state.
@@ -1183,21 +1204,30 @@ All modules use `logger = logging.getLogger(__name__)`. Log level `INFO` in prod
 
 ## 11. Threading and Event Loop Model
 
-`funscript-gateway` uses a single-thread, single-process model with `qasync` to integrate Qt's event loop with asyncio. There are no background threads; all concurrency is cooperative via `async/await`.
+`funscript-gateway` uses a single Qt/asyncio main thread with `qasync`, plus two categories of background activity managed carefully to stay compatible with Windows `ProactorEventLoop`.
 
 ```
 Main Thread
   Qt Event Loop (pumped by qasync)
     └── asyncio Event Loop
           ├── PlayerConnectionManager task
+          │     └── MpcHcBackend: asyncio.to_thread → urllib.request (thread pool)
           ├── OutputManager evaluation loop (50 ms timer)
-          ├── TasmotaDriver HTTP requests (aiohttp)
-          └── MqttDriver publish calls (aiomqtt)
+          │     └── TasmotaDriver: asyncio.to_thread → urllib.request (thread pool)
+          └── MqttDriver connect/disconnect: asyncio.to_thread (thread pool)
+
+Background Threads (managed by paho-mqtt, one per MqttDriver)
+  paho network thread (loop_start) — socket send/recv for MQTT, no asyncio involvement
 ```
 
-Qt signals are emitted synchronously from async callbacks (safe because all code runs on one thread). Slot connections use the default `AutoConnection`, which dispatches immediately when called from the same thread.
+Qt signals are emitted from async callbacks on the main thread (safe because all Qt and asyncio code runs on one thread). Slot connections use the default `AutoConnection`.
 
-**No threading is used.** `QThread` and `concurrent.futures` are explicitly avoided to keep the concurrency model simple and debuggable. If blocking I/O is encountered in the future, `asyncio.to_thread` can be used for individual calls without changing the overall model.
+**Concurrency model summary:**
+
+- All Qt UI and asyncio logic runs on the main thread.
+- Blocking HTTP calls (Tasmota, MPC-HC polling) are offloaded via `asyncio.to_thread` to Python's default thread pool. Results are awaited on the main thread.
+- MQTT network I/O is handled by paho's own background thread (`loop_start`). The asyncio event loop never touches MQTT sockets directly. `asyncio.to_thread` is used only for the initial connect/disconnect handshake.
+- `QThread` and `concurrent.futures` are not used directly.
 
 ---
 
