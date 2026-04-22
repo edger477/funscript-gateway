@@ -29,8 +29,9 @@ Video player ──► funscript-gateway ──► evaluates input value at curr
 1. The player reports its current playback position.
 2. For **Funscript Axis** inputs: the gateway looks up the funscript file (e.g. `myvideo.volume.funscript`) and interpolates its value (0–100) at the current timestamp.
 3. For **Restim** inputs: the gateway polls the configured HTTP endpoint at the configured interval and evaluates conditions (playing state, volume thresholds).
-4. For **Calculated** inputs: the gateway combines two or more inputs using AND / OR / XOR logic.
-5. Every 50 ms, each output reads its assigned input value and applies a threshold + hysteresis to produce ON or OFF, which is sent to the device.
+4. For **AS5311** inputs: the gateway receives position data from a magnetic linear encoder via WebSocket and maps it to 0–100 using configurable threshold and range.
+5. For **Calculated (Logical)** inputs: the gateway combines two or more inputs using AND / OR / XOR logic, converting each input to a boolean with its own configurable threshold and direction.
+6. Every 50 ms, each output reads its assigned input value and applies a threshold + hysteresis to produce ON or OFF, which is sent to the device.
 
 ### Funscript file naming
 
@@ -116,16 +117,29 @@ Polls an HTTP endpoint and evaluates one or more conditions against the response
 | **Default state** | Output when the endpoint is unreachable: `off` or `on` |
 | **Conditions** | Playing (yes/no/any), volume UI above/below threshold, volume device above/below threshold. Each condition has its own enable checkbox. All enabled conditions must pass. |
 
-### Calculated
+### AS5311 Magnetic Encoder
 
-Combines two or more non-calculated inputs using AND / OR / XOR, evaluated left-to-right. Each input is treated as a boolean (≥ 50 = ON). Produces ON (100) or OFF (0). Evaluated continuously regardless of player state.
+Receives position data from the restim AS5311 magnetic linear encoder via a persistent WebSocket connection. Maps a configurable position window to 0–100. Evaluated continuously regardless of player state.
 
 | Setting | Description |
 |---------|-------------|
 | **Name** | Input name |
-| **Entries** | At least 2 non-calculated inputs. First entry has no operator; subsequent entries specify AND / OR / XOR. |
+| **WebSocket URL** | Encoder endpoint (default: `ws://localhost:12346/sensors/as5311`) |
+| **Threshold (mm)** | Position that maps to output value 0 |
+| **Range (mm)** | Span from threshold to full scale. `threshold + range` maps to output value 100. The natural AS5311 range is 2 mm per pole pair. |
 
-The formula is shown live in the dialog, e.g. `((A or B) and C)`.
+Multiple inputs pointing to the same URL share one WebSocket connection.
+
+### Calculated (Logical)
+
+Combines two or more non-calculated inputs using AND / OR / XOR, evaluated left-to-right. Each entry first converts its input's continuous 0–100 value to a boolean using a configurable threshold and direction, then combines the results. Produces ON (100) or OFF (0). Evaluated continuously regardless of player state.
+
+| Setting | Description |
+|---------|-------------|
+| **Name** | Input name |
+| **Entries** | At least 2 non-calculated inputs. First entry has no operator; subsequent entries specify AND / OR / XOR. Each entry also has a direction (≥ / <) and threshold (0–100) for the boolean conversion. |
+
+The formula is shown live in the dialog, e.g. `(vibration ≥ 60.0 or restim < 30.0)`.
 
 ---
 

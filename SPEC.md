@@ -18,10 +18,11 @@
 5. [Input System](#5-input-system)
    - 5.1 [Funscript Axis Input](#51-funscript-axis-input)
    - 5.2 [Restim Input](#52-restim-input)
-   - 5.3 [Calculated Input](#53-calculated-input)
-   - 5.4 [Funscript File Discovery](#54-funscript-file-discovery)
-   - 5.5 [Funscript Parsing](#55-funscript-parsing)
-   - 5.6 [Value Interpolation](#56-value-interpolation)
+   - 5.3 [Calculated Input (Logical)](#53-calculated-input-logical)
+   - 5.4 [AS5311 Magnetic Encoder Input](#54-as5311-magnetic-encoder-input)
+   - 5.5 [Funscript File Discovery](#55-funscript-file-discovery)
+   - 5.6 [Funscript Parsing](#56-funscript-parsing)
+   - 5.7 [Value Interpolation](#57-value-interpolation)
 6. [Output System](#6-output-system)
    - 6.1 [Plugin Architecture](#61-plugin-architecture)
    - 6.2 [Threshold Switch Logic](#62-threshold-switch-logic)
@@ -296,7 +297,7 @@ The active backend is determined by `GatewayConfig.player.type` (`"heresphere"` 
 
 ## 5. Input System
 
-The application supports three types of inputs. All inputs produce a `current_value: float` in the range `[0.0, 100.0]`. Outputs read from any input type uniformly using the input's name.
+The application supports four types of inputs. All inputs produce a `current_value: float` in the range `[0.0, 100.0]`. Outputs read from any input type uniformly using the input's name.
 
 ### 5.1 Funscript Axis Input
 
@@ -334,7 +335,7 @@ A `RestimInput` polls an HTTP endpoint (by default the [restim](https://github.c
 | `url` | str | `http://localhost:12348/v1/status` | HTTP GET endpoint |
 | `poll_interval_s` | float | `2.0` | How often to poll the endpoint (seconds) |
 | `default_value` | bool | `False` | Output state when the endpoint is unreachable (`True` = ON = 100.0, `False` = OFF = 0.0) |
-| `conditions` | list[RestimCondition] | `[]` | Conditions to evaluate (all enabled conditions must pass) |
+| `condition` | RestimCondition | (see below) | Condition to evaluate against the response |
 
 **Restim API response format:**
 
@@ -352,22 +353,25 @@ The `device` key under `volume` is optional. If absent, any condition targeting 
 
 **`RestimCondition` fields:**
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `field` | str | One of `"playing"`, `"volume_ui"`, `"volume_device"` |
-| `operator` | str | `"above"` or `"below"` (for volume fields); for `"playing"`: `"yes"`, `"no"`, or `"any"` |
-| `value` | float | Threshold value (0.0–1.0 for volume fields; ignored for `"playing"`) |
-| `enabled` | bool | Whether this condition is evaluated |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `playing` | str | `"any"` | `"yes"` — input active only while restim is playing; `"no"` — only while not playing; `"any"` — always |
+| `volume_ui_enabled` | bool | `False` | Whether the UI-volume condition is evaluated |
+| `volume_ui_above` | bool | `True` | `True` = pass when UI volume > threshold; `False` = pass when below |
+| `volume_ui_threshold` | float | `0.5` | UI volume threshold (0.0–1.0) |
+| `volume_device_enabled` | bool | `False` | Whether the device-volume condition is evaluated |
+| `volume_device_above` | bool | `True` | `True` = pass when device volume > threshold; `False` = pass when below |
+| `volume_device_threshold` | float | `0.5` | Device volume threshold (0.0–1.0) |
 
-All enabled conditions must be met for the input to output `100.0`. An empty or all-disabled conditions list always produces `100.0`.
+Each `RestimInput` has exactly one `RestimCondition`. All enabled condition checks within it must pass for the input to output `100.0`. If the device volume key is absent from the response and `volume_device_enabled` is `True`, the condition fails.
 
 `RestimInput` is evaluated continuously regardless of player state (it reflects the restim application state, not the video player state).
 
 **Error handling:** When the HTTP request fails or returns a non-200 status, `is_error` is set to `True` and `current_value` is set based on `default_value`. Polling continues at the configured interval; `is_error` clears on the next successful response.
 
-### 5.3 Calculated Input
+### 5.3 Calculated Input (Logical)
 
-A `CalculatedInput` combines two or more non-calculated inputs using boolean logic (AND / OR / XOR), evaluated left-to-right. Each input value is treated as a boolean: `≥ 50.0` = ON, `< 50.0` = OFF. The result is `100.0` (ON) or `0.0` (OFF).
+A `CalculatedInput` combines two or more non-calculated inputs using boolean logic (AND / OR / XOR), evaluated left-to-right. Each entry first converts its input's continuous value (0–100) to a boolean using a configurable threshold and direction, then combines the results. The final result is `100.0` (ON) or `0.0` (OFF).
 
 **Configuration fields:**
 
@@ -379,19 +383,61 @@ A `CalculatedInput` combines two or more non-calculated inputs using boolean log
 
 **`CalculatedEntry` fields:**
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `input_name` | str | Name of a non-calculated input to include |
-| `operator` | str | `"and"`, `"or"`, or `"xor"` (first entry's operator is ignored) |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `input_name` | str | — | Name of a non-calculated input to include |
+| `operator` | str | `"and"` | `"and"`, `"or"`, or `"xor"` (first entry's operator is ignored) |
+| `above` | bool | `True` | `True` = entry boolean is ON when `value ≥ threshold`; `False` = ON when `value < threshold` |
+| `threshold` | float | `50.0` | Threshold for boolean conversion (0–100 scale) |
 
-**Formula display:** Entries are combined left-to-right with automatic bracket insertion for clarity. Examples:
+**Formula display:** Entries are combined left-to-right with automatic bracket insertion for clarity. The live formula label in the dialog shows the threshold operator for each entry, e.g.:
 
-- 2 entries A, B with OR: `(A or B)`
-- 3 entries A, B (OR), C (AND): `((A or B) and C)`
+- 2 entries: `(vibration ≥ 60.0 or restim < 30.0)`
+- 3 entries: `((vibration ≥ 60.0 or restim < 30.0) and axis ≥ 50.0)`
 
 `CalculatedInput` is evaluated continuously regardless of player state.
 
-### 5.4 Funscript File Discovery
+### 5.4 AS5311 Magnetic Encoder Input
+
+An `As5311Input` receives position data from the restim AS5311 magnetic linear encoder via a persistent WebSocket connection. The encoder reports position in metres; the input maps a configurable window of that position to a 0–100 output value.
+
+**Configuration fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | str | — | Input name |
+| `url` | str | `ws://localhost:12346/sensors/as5311` | WebSocket endpoint |
+| `enabled` | bool | `True` | Whether to connect and read |
+| `threshold_mm` | float | `0.0` | Position (mm) that maps to output value 0 |
+| `range_mm` | float | `2.0` | Span (mm) from threshold to full scale. `threshold_mm + range_mm` maps to output value 100. The AS5311 natural range is 2 mm per pole pair. |
+
+**Runtime fields (not persisted):**
+
+| Field | Description |
+|-------|-------------|
+| `current_value` | Mapped output value 0–100 |
+| `last_position_mm` | Raw position from last WebSocket message (mm) |
+| `is_error` | `True` when the WebSocket connection is broken |
+
+**Message format:**
+
+```json
+{"x": 0.000001}
+```
+
+The `x` field is a float in metres (nanometre precision). The mapping formula is:
+
+```
+output = clamp((x_mm − threshold_mm) / range_mm × 100, 0, 100)
+```
+
+Positions below `threshold_mm` map to 0; positions above `threshold_mm + range_mm` map to 100.
+
+**Shared connections:** Multiple `As5311Input` instances pointing to the same WebSocket URL share one connection. Each input applies its own `threshold_mm` and `range_mm` to the same raw position value. The `InputPoller` maintains one asyncio task per unique URL.
+
+**Error handling:** On WebSocket disconnect or error, `is_error` is set to `True` and `current_value` is not updated. The poller retries the connection after 5 seconds.
+
+### 5.5 Funscript File Discovery
 
 Funscript files follow the naming convention derived from restim:
 
@@ -419,7 +465,7 @@ If a previously loaded file path changes, auto-discovered axis entries are re-va
 
 **Additional search paths:** Users may configure extra directories to search. Discovery checks the video's own directory first, then each additional search path in order.
 
-### 5.5 Funscript Parsing
+### 5.6 Funscript Parsing
 
 A funscript file is a UTF-8 JSON document:
 
@@ -453,7 +499,7 @@ def load(self, path: str) -> list[tuple[int, int]]:
 
 The sorted action list is stored in memory for the lifetime of the axis. Files are re-read when the user explicitly refreshes or when the video changes.
 
-### 5.6 Value Interpolation
+### 5.7 Value Interpolation
 
 Given a playback position `t_ms` and the sorted action list, the current value is computed using **linear interpolation** between the two surrounding keyframes.
 
@@ -884,11 +930,22 @@ url = "http://localhost:12348/v1/status"
 poll_interval_s = 2.0
 default_value = false
 
-  [[inputs.conditions]]
-  field = "playing"
-  operator = "yes"
-  value = 0.0
-  enabled = true
+  [inputs.condition]
+  playing = "yes"
+  volume_ui_enabled = false
+  volume_ui_above = true
+  volume_ui_threshold = 0.5
+  volume_device_enabled = false
+  volume_device_above = true
+  volume_device_threshold = 0.5
+
+[[inputs]]
+type = "as5311"
+name = "stroke_position"
+enabled = true
+url = "ws://localhost:12346/sensors/as5311"
+threshold_mm = 0.0
+range_mm = 2.0
 
 [[inputs]]
 type = "calculated"
@@ -898,10 +955,14 @@ enabled = true
   [[inputs.entries]]
   input_name = "vibration"
   operator = "and"
+  above = true
+  threshold = 50.0
 
   [[inputs.entries]]
   input_name = "restim_playing"
   operator = "and"
+  above = true
+  threshold = 50.0
 
 [[outputs]]
 name = "Bed Vibrator"
@@ -1030,7 +1091,7 @@ Displays all configured inputs. Updated when inputs are added/removed and at the
 | Column | Content |
 |--------|---------|
 | En | Enabled checkbox |
-| Type | "Funscript Axis" / "Restim" / "Calculated" |
+| Type | "Funscript Axis" / "Restim" / "Calculated (Logical)" / "AS5311" |
 | Name | Input name string |
 | Value | Live horizontal progress bar (0–100) with label |
 | Status | Type-specific status (see below) |
@@ -1042,11 +1103,12 @@ Displays all configured inputs. Updated when inputs are added/removed and at the
 |------|---------------|
 | Funscript Axis | "OK" / "File missing" (amber) / "Not loaded" / "No file (default X.XX)" (grey) |
 | Restim | "OK" / "Error (default on\|off)" (red) |
-| Calculated | "N entr(y/ies)" |
+| Calculated (Logical) | "N entr(y/ies)" |
+| AS5311 | "X.Xg–Y.Yg mm" range summary / "Error" (red) |
 
 **Toolbar actions:**
 
-- **Add** — dropdown menu with three options: *Funscript Axis*, *Restim*, *Calculated*
+- **Add** — dropdown menu with four options: *Funscript Axis*, *Restim*, *Calculated (Logical)*, *AS5311 Sensor*
 - **Edit** — opens the edit dialog for the selected input (single-selection only)
 - **Remove** — removes selected input(s); disabled if any selected input has "Used In" > 0
 - **Refresh** — re-run funscript file discovery for the current video
@@ -1055,7 +1117,8 @@ Displays all configured inputs. Updated when inputs are added/removed and at the
 
 - *Funscript Axis*: name field, axis name hint, default value (0.0–1.0), enabled checkbox.
 - *Restim*: name, endpoint URL, poll interval, default state (off/on), enabled, conditions group (playing yes/no/any; volume UI above/below threshold; volume device above/below threshold — each condition has its own enable checkbox).
-- *Calculated*: name, enabled, dynamic entry rows (Add Entry button grows the list), live formula label. First entry has no operator; subsequent entries have an operator combo (AND/OR/XOR). Requires at least 2 entries.
+- *Calculated (Logical)*: name, enabled, dynamic entry rows (Add Entry button grows the list), live formula label. Each row has: operator combo (AND/OR/XOR, absent for first entry), input selection, direction (≥ / <), and threshold (0–100). Requires at least 2 entries.
+- *AS5311 Sensor*: name, WebSocket URL, threshold (mm), range (mm), enabled checkbox. Value bar shows position in mm; status shows threshold–range bounds.
 
 ### 8.5 Outputs Tab
 
@@ -1158,20 +1221,23 @@ FunscriptAxis = FunscriptAxisInput       # backwards-compat alias
 
 @dataclass
 class RestimCondition:
-    field: str                           # "playing" | "volume_ui" | "volume_device"
-    operator: str                        # "yes"|"no"|"any" for playing; "above"|"below" for volume
-    value: float = 0.0                   # threshold (ignored for "playing")
-    enabled: bool = True
+    playing: str = "any"                 # "yes" | "no" | "any"
+    volume_ui_enabled: bool = False
+    volume_ui_above: bool = True         # True = pass when UI volume > threshold
+    volume_ui_threshold: float = 0.5
+    volume_device_enabled: bool = False
+    volume_device_above: bool = True     # True = pass when device volume > threshold
+    volume_device_threshold: float = 0.5
 
 
 @dataclass
 class RestimInput:
     name: str
-    enabled: bool = True
     url: str = "http://localhost:12348/v1/status"
+    enabled: bool = True
     poll_interval_s: float = 2.0
     default_value: bool = False          # output state when endpoint is unreachable
-    conditions: list[RestimCondition] = field(default_factory=list)
+    condition: RestimCondition = field(default_factory=RestimCondition)
     # runtime fields:
     current_value: float = 0.0          # 100.0 = ON, 0.0 = OFF
     is_error: bool = False              # True when last poll failed
@@ -1181,6 +1247,8 @@ class RestimInput:
 class CalculatedEntry:
     input_name: str
     operator: str = "and"               # "and" | "or" | "xor"; first entry's operator is ignored
+    above: bool = True                  # True: ON when value >= threshold; False: ON when value < threshold
+    threshold: float = 50.0            # 0–100 threshold for boolean conversion
 
 
 @dataclass
@@ -1192,7 +1260,20 @@ class CalculatedInput:
     current_value: float = 0.0          # 100.0 = ON, 0.0 = OFF
 
 
-AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput]
+@dataclass
+class As5311Input:
+    name: str
+    url: str = "ws://localhost:12346/sensors/as5311"
+    enabled: bool = True
+    threshold_mm: float = 0.0           # position (mm) that maps to output 0
+    range_mm: float = 2.0               # span (mm) from threshold to full scale (100)
+    # runtime fields:
+    current_value: float = 0.0
+    last_position_mm: float = 0.0
+    is_error: bool = False
+
+
+AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput, As5311Input]
 ```
 
 ### `PlayerConfig`
@@ -1433,8 +1514,9 @@ Main Thread
           ├── PlayerConnectionManager task
           │     └── MpcHcBackend: asyncio.to_thread → urllib.request (thread pool)
           ├── InputPoller task
-          │     └── RestimInput: asyncio.to_thread → urllib.request (thread pool, per poll_interval_s)
-          │     └── CalculatedInput: evaluated synchronously from RestimInput/FunscriptAxisInput values
+          │     ├── RestimInput: asyncio.to_thread → urllib.request (thread pool, per poll_interval_s)
+          │     ├── As5311Input: one asyncio WS task per unique URL (websockets library)
+          │     └── CalculatedInput: evaluated synchronously each tick from other inputs' current_value
           ├── OutputManager evaluation loop (50 ms timer)
           │     └── TasmotaDriver: asyncio.to_thread → urllib.request (thread pool)
           └── MqttDriver connect/disconnect: asyncio.to_thread (thread pool)
@@ -1504,10 +1586,10 @@ Candidates:
 
 The `InputPoller` is designed to support additional polled input sources. New input types add:
 1. A new `*Input` dataclass (with `name`, `enabled`, `current_value`).
-2. A polling method in `InputPoller`.
+2. A polling or streaming method in `InputPoller`.
 3. A dialog in `input_dialogs.py` and registration in `inputs_tab.py`.
 
-Candidates: serial port (e.g., Arduino sensor), WebSocket feed, OSC input.
+Candidates: serial port (e.g., Arduino sensor), OSC input.
 
 ### Scripted Outputs (User Python Expressions)
 
@@ -1557,7 +1639,7 @@ funscript-gateway/
 │           ├── tray.py              # SystemTrayIcon
 │           ├── status_tab.py
 │           ├── inputs_tab.py        # Inputs tab (replaces axes_tab.py)
-│           ├── input_dialogs.py     # FunscriptAxisDialog, RestimDialog, CalculatedDialog
+│           ├── input_dialogs.py     # FunscriptAxisDialog, RestimDialog, CalculatedDialog, As5311Dialog
 │           ├── outputs_tab.py
 │           ├── settings_tab.py
 │           └── output_dialog.py     # Add/Edit output dialog

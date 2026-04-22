@@ -296,12 +296,12 @@ class CalculatedDialog(QDialog):
             op_combo = QComboBox()
             op_combo.addItems(["and", "or", "xor"])
             op_combo.setCurrentText(operator)
-            op_combo.setFixedWidth(56)
+            op_combo.setFixedWidth(112)
             op_combo.currentTextChanged.connect(self._update_formula)
             row_h.addWidget(op_combo)
         else:
             spacer = QLabel("      ")
-            spacer.setFixedWidth(56)
+            spacer.setFixedWidth(112)
             row_h.addWidget(spacer)
 
         inp_combo = QComboBox()
@@ -315,7 +315,7 @@ class CalculatedDialog(QDialog):
         dir_combo = QComboBox()
         dir_combo.addItems(["\u2265", "<"])   # ≥ / <
         dir_combo.setCurrentIndex(0 if above else 1)
-        dir_combo.setFixedWidth(44)
+        dir_combo.setFixedWidth(88)
         dir_combo.currentTextChanged.connect(self._update_formula)
         row_h.addWidget(dir_combo)
 
@@ -324,7 +324,7 @@ class CalculatedDialog(QDialog):
         thresh_spin.setDecimals(1)
         thresh_spin.setSingleStep(5.0)
         thresh_spin.setValue(threshold)
-        thresh_spin.setFixedWidth(72)
+        thresh_spin.setFixedWidth(144)
         thresh_spin.valueChanged.connect(self._update_formula)
         row_h.addWidget(thresh_spin)
 

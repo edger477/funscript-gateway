@@ -113,6 +113,10 @@ class InputsTab(QWidget):
         app_state.inputs_updated.connect(self._on_inputs_updated)
         app_state.outputs_updated.connect(self._refresh_values)
 
+        # Populate from already-loaded config (inputs_updated is not emitted at startup)
+        if app_state.inputs:
+            self._rebuild_table(app_state.inputs)
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
