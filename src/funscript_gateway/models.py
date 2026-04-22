@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Union
 
 if TYPE_CHECKING:
     pass
@@ -26,13 +26,61 @@ class PlayerState:
 
 
 @dataclass
-class FunscriptAxis:
+class FunscriptAxisInput:
     name: str
-    file_path: str
     enabled: bool = True
+    default_value: float = 0.0  # 0.0–1.0; applied (×100) when file not found for current video
+    # Runtime fields populated by FunscriptEngine (not persisted):
+    file_path: str = ""
     actions: list[tuple[int, int]] = field(default_factory=list)
     current_value: float = 0.0
     file_missing: bool = False
+
+
+# Backwards-compat alias used throughout the codebase
+FunscriptAxis = FunscriptAxisInput
+
+
+@dataclass
+class RestimCondition:
+    playing: Literal["yes", "no", "any"] = "any"
+    volume_ui_enabled: bool = False
+    volume_ui_above: bool = True   # True = "above threshold"
+    volume_ui_threshold: float = 0.5
+    volume_device_enabled: bool = False
+    volume_device_above: bool = True
+    volume_device_threshold: float = 0.5
+
+
+@dataclass
+class RestimInput:
+    name: str
+    url: str = "http://localhost:12348/v1/status"
+    enabled: bool = True
+    poll_interval_s: float = 2.0
+    default_value: bool = False  # on/off when endpoint is unavailable
+    condition: RestimCondition = field(default_factory=RestimCondition)
+    # Runtime fields (not persisted):
+    current_value: float = 0.0  # 100.0 if condition met, 0.0 otherwise
+    is_error: bool = False       # True when HTTP request failed
+
+
+@dataclass
+class CalculatedEntry:
+    input_name: str
+    operator: Literal["and", "or", "xor"] = "and"  # operator before this entry; ignored for first
+
+
+@dataclass
+class CalculatedInput:
+    name: str
+    enabled: bool = True
+    entries: list[CalculatedEntry] = field(default_factory=list)
+    # Runtime:
+    current_value: float = 0.0
+
+
+AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput]
 
 
 PLAYER_DEFAULT_PORTS: dict[str, int] = {
@@ -83,10 +131,10 @@ class OutputConfig:
     name: str = ""
     enabled: bool = True
     type: Literal["threshold_tasmota", "threshold_mqtt"] = "threshold_tasmota"
-    axis_name: str = ""
+    input_name: str = ""
     on_pause: Literal["hold", "force_on", "force_off"] = "hold"
     on_disconnect: Literal["hold", "force_on", "force_off"] = "force_off"
-    on_missing_axis: Literal["hold", "force_on", "force_off"] = "force_off"
+    on_missing_input: Literal["hold", "force_on", "force_off"] = "force_off"
     threshold: ThresholdSwitchConfig = field(default_factory=ThresholdSwitchConfig)
     tasmota: TasmotaOutputConfig = field(default_factory=TasmotaOutputConfig)
     mqtt: MqttOutputConfig = field(default_factory=MqttOutputConfig)
@@ -96,16 +144,12 @@ class OutputConfig:
 class GatewayConfig:
     player: PlayerConfig = field(default_factory=PlayerConfig)
     funscript_search_paths: list[str] = field(default_factory=list)
-    axes: list[FunscriptAxis] = field(default_factory=list)
+    inputs: list = field(default_factory=list)  # list[AnyInput]
     outputs: list[OutputConfig] = field(default_factory=list)
 
 
 class OutputInstance:
-    """Pairs a SignalProcessor with a DeviceDriver for a single output channel.
-
-    Not a dataclass because it holds live processor and driver objects that
-    cannot be default-constructed.
-    """
+    """Pairs a SignalProcessor with a DeviceDriver for a single output channel."""
 
     def __init__(
         self,

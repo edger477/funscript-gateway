@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from PySide6.QtCore import QObject, Signal
 
 from funscript_gateway.models import (
-    FunscriptAxis,
+    FunscriptAxisInput,
     GatewayConfig,
     OutputInstance,
     PlayerState,
 )
+
+if TYPE_CHECKING:
+    from funscript_gateway.models import AnyInput
 
 
 class AppState(QObject):
@@ -21,7 +26,7 @@ class AppState(QObject):
     """
 
     player_state_changed = Signal(object)  # carries PlayerState
-    axes_updated = Signal(list)            # carries list[FunscriptAxis]
+    inputs_updated = Signal(list)          # carries list[AnyInput]
     outputs_updated = Signal()
 
     def __init__(self) -> None:
@@ -29,5 +34,10 @@ class AppState(QObject):
         self.config: GatewayConfig = GatewayConfig()
         self.player_state: PlayerState = PlayerState()
         self.current_time_ms: int = 0
-        self.axes: list[FunscriptAxis] = []
+        self.inputs: list = []   # list[AnyInput] — runtime state for all input types
         self.outputs: list[OutputInstance] = []
+
+    @property
+    def axes(self) -> list[FunscriptAxisInput]:
+        """Convenience property returning only FunscriptAxisInput entries."""
+        return [i for i in self.inputs if isinstance(i, FunscriptAxisInput)]

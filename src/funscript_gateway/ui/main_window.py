@@ -17,14 +17,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("funscript-gateway")
         self.setMinimumSize(700, 450)
 
-        from funscript_gateway.ui.axes_tab import AxesTab
+        from funscript_gateway.ui.inputs_tab import InputsTab
         from funscript_gateway.ui.outputs_tab import OutputsTab
         from funscript_gateway.ui.settings_tab import SettingsTab
         from funscript_gateway.ui.status_tab import StatusTab
 
         tabs = QTabWidget()
         tabs.addTab(StatusTab(app_state), "Status")
-        tabs.addTab(AxesTab(app_state, engine), "Axes")
+        tabs.addTab(InputsTab(app_state, engine), "Inputs")
         tabs.addTab(OutputsTab(app_state, output_manager), "Outputs")
         tabs.addTab(SettingsTab(app_state, player_manager), "Settings")
         self.setCentralWidget(tabs)

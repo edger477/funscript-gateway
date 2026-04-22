@@ -19,16 +19,18 @@ When you play a video in a supported player, funscript-gateway reads the associa
 ## How it works
 
 ```
-Video player ──► funscript-gateway ──► evaluates funscript axis value at current timestamp
+Video player ──► funscript-gateway ──► evaluates input value at current timestamp
+                                    │   (funscript axis / restim poll / calculated logic)
                                     └──► applies threshold + hysteresis ──► ON / OFF
                                                                          └──► Tasmota HTTP
                                                                          └──► MQTT publish
 ```
 
 1. The player reports its current playback position.
-2. The gateway looks up the funscript file for the configured axis (e.g. `myvideo.volume.funscript`).
-3. Every 50 ms it interpolates the axis value (0–100) at the current timestamp.
-4. Each output has a threshold processor: if the value crosses the threshold (with optional hysteresis), it sends ON or OFF to the device.
+2. For **Funscript Axis** inputs: the gateway looks up the funscript file (e.g. `myvideo.volume.funscript`) and interpolates its value (0–100) at the current timestamp.
+3. For **Restim** inputs: the gateway polls the configured HTTP endpoint at the configured interval and evaluates conditions (playing state, volume thresholds).
+4. For **Calculated** inputs: the gateway combines two or more inputs using AND / OR / XOR logic.
+5. Every 50 ms, each output reads its assigned input value and applies a threshold + hysteresis to produce ON or OFF, which is sent to the device.
 
 ### Funscript file naming
 
@@ -86,26 +88,61 @@ In funscript-gateway → **Settings** tab:
 
 ---
 
-## Axes
+## Inputs
 
-In the **Axes** tab, add named axes that correspond to the `.funscript` file suffix. Each axis can be enabled or disabled independently. If the funscript file for an active axis is not found alongside the current video, each output's *On missing axis* behaviour applies.
+In the **Inputs** tab, configure the data sources that outputs read from. Three input types are available:
+
+### Funscript Axis
+
+Reads the interpolated value from a `.funscript` file at the current playback position.
+
+| Setting | Description |
+|---------|-------------|
+| **Name** | Axis name — must match the funscript filename segment (e.g. `volume` for `myvideo.volume.funscript`) |
+| **Default value** | Value (0–1) to use when the funscript file is not found for the current video. Outputs always receive this value when the file is absent; `on_missing_input` does not apply. |
+| **Enabled** | Toggle without deleting |
+
+The **Refresh** button re-runs file discovery for the current video.
+
+### Restim
+
+Polls an HTTP endpoint and evaluates one or more conditions against the response. Produces ON (100) when all enabled conditions pass, OFF (0) otherwise. Evaluated continuously regardless of player state.
+
+| Setting | Description |
+|---------|-------------|
+| **Name** | Input name |
+| **URL** | HTTP GET endpoint (default: `http://localhost:12348/v1/status`) |
+| **Poll interval** | How often to poll, in seconds |
+| **Default state** | Output when the endpoint is unreachable: `off` or `on` |
+| **Conditions** | Playing (yes/no/any), volume UI above/below threshold, volume device above/below threshold. Each condition has its own enable checkbox. All enabled conditions must pass. |
+
+### Calculated
+
+Combines two or more non-calculated inputs using AND / OR / XOR, evaluated left-to-right. Each input is treated as a boolean (≥ 50 = ON). Produces ON (100) or OFF (0). Evaluated continuously regardless of player state.
+
+| Setting | Description |
+|---------|-------------|
+| **Name** | Input name |
+| **Entries** | At least 2 non-calculated inputs. First entry has no operator; subsequent entries specify AND / OR / XOR. |
+
+The formula is shown live in the dialog, e.g. `((A or B) and C)`.
 
 ---
 
 ## Outputs
 
-Each output maps one axis to one device. Add outputs in the **Outputs** tab.
+Each output maps one input to one device. Add outputs in the **Outputs** tab.
 
 ### Common settings
 
 | Setting | Description |
 |---------|-------------|
 | **Name** | Display name |
-| **Axis** | Which axis value to read |
+| **Input** | Which input value to read |
 | **Enabled** | Toggle without deleting |
-| **On pause** | What to do when playback is paused: `hold` (keep last state), `force_off`, `force_on` |
+| **On pause** | What to do when playback is paused (only relevant for Funscript Axis inputs): `hold` (keep last state), `force_off`, `force_on` |
 | **On disconnect** | What to do when the player disconnects: `hold`, `force_off`, `force_on` |
-| **On missing axis** | What to do when no funscript file is found for this axis: `hold`, `force_off`, `force_on` |
+| **On missing input** | What to do when the named input is not in the inputs list: `hold`, `force_off`, `force_on` |
 
 ### Threshold settings
 
@@ -150,10 +187,10 @@ Example output config for a Tasmota plug on the local network:
 name = "my-plug"
 enabled = true
 type = "threshold_tasmota"
-axis_name = "volume"
+input_name = "volume"
 on_pause = "hold"
 on_disconnect = "force_off"
-on_missing_axis = "force_off"
+on_missing_input = "force_off"
 
 [outputs.threshold]
 threshold = 50.0
@@ -202,10 +239,10 @@ Example output config for a Tasmota device controlled via Home Assistant MQTT:
 name = "my-mqtt-device"
 enabled = true
 type = "threshold_mqtt"
-axis_name = "volume-prostate"
+input_name = "volume-prostate"
 on_pause = "force_off"
 on_disconnect = "force_off"
-on_missing_axis = "force_off"
+on_missing_input = "force_off"
 
 [outputs.threshold]
 threshold = 50.0

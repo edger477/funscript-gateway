@@ -8,14 +8,14 @@ import logging
 from funscript_gateway.app_state import AppState
 from funscript_gateway.funscript.engine import FunscriptEngine, interpolate
 from funscript_gateway.models import (
-    FunscriptAxis,
+    FunscriptAxisInput,
     MediaConnectionState,
     OutputConfig,
     OutputInstance,
+    RestimInput,
 )
 from funscript_gateway.outputs.tasmota import TasmotaDriver
 from funscript_gateway.outputs.threshold import ThresholdSwitchProcessor
-
 from funscript_gateway.outputs.mqtt import MqttDriver
 
 logger = logging.getLogger(__name__)
@@ -102,11 +102,23 @@ class OutputManager:
                 logger.warning("Unknown output type '%s' for '%s'.", cfg.type, cfg.name)
                 return None
 
-    def _resolve_axis(self, axis_name: str) -> FunscriptAxis | None:
-        for axis in self._app_state.axes:
-            if axis.name == axis_name:
-                return axis
+    def _resolve_input(self, input_name: str):
+        """Return the named input from app_state.inputs, or None."""
+        for inp in self._app_state.inputs:
+            if inp.name == input_name:
+                return inp
         return None
+
+    @staticmethod
+    def _input_is_available(inp) -> bool:
+        if not inp.enabled:
+            return False
+        if isinstance(inp, FunscriptAxisInput):
+            # file_missing with default_value still counts as available
+            return True
+        if isinstance(inp, RestimInput):
+            return not inp.is_error
+        return True  # CalculatedInput always available when enabled
 
     async def _evaluation_loop(self) -> None:
         loop = asyncio.get_event_loop()
@@ -131,26 +143,35 @@ class OutputManager:
             for output in self._app_state.outputs:
                 if not output.config.enabled:
                     continue
-
                 if output.driver is None:
                     continue
 
-                axis = self._resolve_axis(output.config.axis_name)
-                axis_available = axis is not None and axis.enabled and not axis.file_missing
+                inp = self._resolve_input(output.config.input_name)
 
-                if not axis_available:
-                    forced = self._handle_missing_axis_behavior(output)
+                if inp is None:
+                    forced = self._handle_missing_input_behavior(output)
                     if forced is None:
                         continue
                     new_state = forced
-                elif is_playing:
-                    new_state = output.processor.process(axis.current_value)
-                    output.last_input_value = axis.current_value
+                elif not self._input_is_available(inp):
+                    forced = self._handle_missing_input_behavior(output)
+                    if forced is None:
+                        continue
+                    new_state = forced
+                elif isinstance(inp, FunscriptAxisInput):
+                    # FunscriptAxisInput only drives output during playback
+                    if is_playing:
+                        new_state = output.processor.process(inp.current_value)
+                        output.last_input_value = inp.current_value
+                    else:
+                        forced = self._handle_pause_behavior(output)
+                        if forced is None:
+                            continue
+                        new_state = forced
                 else:
-                    forced = self._handle_pause_behavior(output)
-                    if forced is None:
-                        continue
-                    new_state = forced
+                    # RestimInput / CalculatedInput: always active, independent of player state
+                    new_state = output.processor.process(inp.current_value)
+                    output.last_input_value = inp.current_value
 
                 output.last_output_state = new_state
 
@@ -198,8 +219,8 @@ class OutputManager:
             case "hold":      return None
 
     @staticmethod
-    def _handle_missing_axis_behavior(output: OutputInstance) -> bool | None:
-        match output.config.on_missing_axis:
+    def _handle_missing_input_behavior(output: OutputInstance) -> bool | None:
+        match output.config.on_missing_input:
             case "force_off": return False
             case "force_on":  return True
             case "hold":      return None

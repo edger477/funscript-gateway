@@ -24,7 +24,7 @@ from funscript_gateway.ui.output_dialog import OutputDialog
 _COL_ENABLED = 0
 _COL_NAME = 1
 _COL_TYPE = 2
-_COL_AXIS = 3
+_COL_INPUT_NAME = 3
 _COL_INPUT = 4
 _COL_STATE = 5
 _NUM_COLS = 6
@@ -63,7 +63,7 @@ class OutputsTab(QWidget):
         # Table
         self._table = QTableWidget(0, _NUM_COLS)
         self._table.setHorizontalHeaderLabels(
-            ["Enabled", "Name", "Type", "Axis", "Input", "State"]
+            ["Enabled", "Name", "Type", "Input", "Value", "State"]
         )
         self._table.horizontalHeader().setSectionResizeMode(
             _COL_NAME, QHeaderView.ResizeMode.Stretch
@@ -100,7 +100,7 @@ class OutputsTab(QWidget):
         self._table.setItem(
             row, _COL_TYPE, QTableWidgetItem(_TYPE_LABELS.get(cfg.type, cfg.type))
         )
-        self._table.setItem(row, _COL_AXIS, QTableWidgetItem(cfg.axis_name))
+        self._table.setItem(row, _COL_INPUT_NAME, QTableWidgetItem(cfg.input_name))
         self._table.setItem(
             row, _COL_INPUT, QTableWidgetItem(f"{instance.last_input_value:.1f}")
         )
@@ -115,11 +115,11 @@ class OutputsTab(QWidget):
             state_item.setForeground(Qt.GlobalColor.darkGray)
         self._table.setItem(row, _COL_STATE, state_item)
 
-    def _axis_names(self) -> list[str]:
-        return [a.name for a in self._app_state.axes]
+    def _input_names(self) -> list[str]:
+        return [inp.name for inp in self._app_state.inputs]
 
     def _on_add(self) -> None:
-        dlg = OutputDialog(self._axis_names(), parent=self)
+        dlg = OutputDialog(self._input_names(), parent=self)
         if dlg.exec() == OutputDialog.DialogCode.Accepted:
             new_cfg = dlg.get_config()
             self._app_state.config.outputs.append(new_cfg)
@@ -134,7 +134,7 @@ class OutputsTab(QWidget):
         if row >= len(outputs):
             return
         existing_cfg = outputs[row].config
-        dlg = OutputDialog(self._axis_names(), config=existing_cfg, parent=self)
+        dlg = OutputDialog(self._input_names(), config=existing_cfg, parent=self)
         if dlg.exec() == OutputDialog.DialogCode.Accepted:
             new_cfg = dlg.get_config()
             self._app_state.config.outputs[row] = new_cfg

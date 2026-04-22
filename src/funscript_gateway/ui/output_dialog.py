@@ -32,12 +32,12 @@ from funscript_gateway.models import (
 class OutputDialog(QDialog):
     """Two-panel dialog for creating or editing an output configuration."""
 
-    def __init__(self, axes: list[str], config: OutputConfig | None = None, parent=None) -> None:
+    def __init__(self, inputs: list[str], config: OutputConfig | None = None, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Output Configuration")
         self.setMinimumWidth(560)
 
-        self._axes = axes
+        self._inputs = inputs
         self._initial_config = config or OutputConfig()
 
         main = QVBoxLayout(self)
@@ -51,13 +51,13 @@ class OutputDialog(QDialog):
         self._name_edit = QLineEdit(self._initial_config.name)
         left_layout.addRow("Name:", self._name_edit)
 
-        self._axis_combo = QComboBox()
-        for a in axes:
-            self._axis_combo.addItem(a)
-        idx = self._axis_combo.findText(self._initial_config.axis_name)
+        self._input_combo = QComboBox()
+        for a in inputs:
+            self._input_combo.addItem(a)
+        idx = self._input_combo.findText(self._initial_config.input_name)
         if idx >= 0:
-            self._axis_combo.setCurrentIndex(idx)
-        left_layout.addRow("Axis:", self._axis_combo)
+            self._input_combo.setCurrentIndex(idx)
+        left_layout.addRow("Input:", self._input_combo)
 
         self._enabled_check = QCheckBox()
         self._enabled_check.setChecked(self._initial_config.enabled)
@@ -75,11 +75,11 @@ class OutputDialog(QDialog):
         self._on_disconnect_combo.setCurrentText(self._initial_config.on_disconnect)
         left_layout.addRow("On disconnect:", self._on_disconnect_combo)
 
-        self._on_missing_axis_combo = QComboBox()
+        self._on_missing_input_combo = QComboBox()
         for opt in ("force_off", "hold", "force_on"):
-            self._on_missing_axis_combo.addItem(opt)
-        self._on_missing_axis_combo.setCurrentText(self._initial_config.on_missing_axis)
-        left_layout.addRow("On missing axis:", self._on_missing_axis_combo)
+            self._on_missing_input_combo.addItem(opt)
+        self._on_missing_input_combo.setCurrentText(self._initial_config.on_missing_input)
+        left_layout.addRow("On missing input:", self._on_missing_input_combo)
 
         outer.addWidget(left)
 
@@ -279,10 +279,10 @@ class OutputDialog(QDialog):
             name=self._name_edit.text().strip(),
             enabled=self._enabled_check.isChecked(),
             type=self._driver_type_combo.currentText(),
-            axis_name=self._axis_combo.currentText(),
+            input_name=self._input_combo.currentText(),
             on_pause=self._on_pause_combo.currentText(),
             on_disconnect=self._on_disconnect_combo.currentText(),
-            on_missing_axis=self._on_missing_axis_combo.currentText(),
+            on_missing_input=self._on_missing_input_combo.currentText(),
             threshold=threshold,
             tasmota=tasmota,
             mqtt=mqtt,

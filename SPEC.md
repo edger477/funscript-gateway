@@ -1,7 +1,7 @@
 # funscript-gateway — Technical Specification
 
-**Version:** 0.1.1  
-**Date:** 2026-04-11  
+**Version:** 0.1.2  
+**Date:** 2026-04-22  
 **Status:** Draft
 
 ---
@@ -15,10 +15,13 @@
    - 4.1 [HereSphere Protocol](#41-heresphere-protocol)
    - 4.2 [MPC-HC Protocol](#42-mpc-hc-protocol)
    - 4.3 [Player Connection Manager](#43-player-connection-manager)
-5. [Funscript Axis System](#5-funscript-axis-system)
-   - 5.1 [File Discovery](#51-file-discovery)
-   - 5.2 [Funscript Parsing](#52-funscript-parsing)
-   - 5.3 [Value Interpolation](#53-value-interpolation)
+5. [Input System](#5-input-system)
+   - 5.1 [Funscript Axis Input](#51-funscript-axis-input)
+   - 5.2 [Restim Input](#52-restim-input)
+   - 5.3 [Calculated Input](#53-calculated-input)
+   - 5.4 [Funscript File Discovery](#54-funscript-file-discovery)
+   - 5.5 [Funscript Parsing](#55-funscript-parsing)
+   - 5.6 [Value Interpolation](#56-value-interpolation)
 6. [Output System](#6-output-system)
    - 6.1 [Plugin Architecture](#61-plugin-architecture)
    - 6.2 [Threshold Switch Logic](#62-threshold-switch-logic)
@@ -30,7 +33,7 @@
    - 8.1 [System Tray](#81-system-tray)
    - 8.2 [Main Window Layout](#82-main-window-layout)
    - 8.3 [Status Tab](#83-status-tab)
-   - 8.4 [Axes Tab](#84-axes-tab)
+   - 8.4 [Inputs Tab](#84-inputs-tab)
    - 8.5 [Outputs Tab](#85-outputs-tab)
    - 8.6 [Settings Tab](#86-settings-tab)
 9. [Key Data Structures](#9-key-data-structures)
@@ -58,9 +61,13 @@ Player Connection Manager
      |
      | PlayerState { current_time, is_playing, file_path }
      v
-Funscript Engine
+Funscript Engine                      Input Poller
+     |                                     |
+     | FunscriptAxisInput.current_value     | RestimInput / CalculatedInput
+     | (from funscript file at current_time)| .current_value (from HTTP poll / logic)
+     +-------------------------------------+
      |
-     | axis_name -> interpolated value (0-100) at current_time
+     | input_name -> current_value (0-100)
      v
 Output Evaluation Loop  (20 Hz, every 50 ms)
      |
@@ -118,13 +125,14 @@ main.py
         ├── SystemTrayIcon
         ├── MainWindow
         │     ├── StatusTab
-        │     ├── AxesTab
+        │     ├── InputsTab
         │     ├── OutputsTab
         │     └── SettingsTab
         ├── PlayerConnectionManager      (asyncio task)
         │     ├── HereSphereBackend
         │     └── MpcHcBackend
         ├── FunscriptEngine              (synchronous, called from async context)
+        ├── InputPoller                  (asyncio task, polls RestimInput & evaluates CalculatedInput)
         └── OutputManager               (asyncio task, 20 Hz loop)
               ├── ThresholdSwitchProcessor
               ├── TasmotaDriver          (async HTTP)
@@ -286,9 +294,104 @@ The active backend is determined by `GatewayConfig.player.type` (`"heresphere"` 
 
 ---
 
-## 5. Funscript Axis System
+## 5. Input System
 
-### 5.1 File Discovery
+The application supports three types of inputs. All inputs produce a `current_value: float` in the range `[0.0, 100.0]`. Outputs read from any input type uniformly using the input's name.
+
+### 5.1 Funscript Axis Input
+
+A `FunscriptAxisInput` reads its value from a `.funscript` file interpolated at the current playback position. It is always considered "available" (the `default_value` covers the file-missing case), and its value is only meaningful during active playback.
+
+**Configuration fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | str | — | Axis name; must match the funscript filename segment |
+| `enabled` | bool | `True` | Whether to evaluate this input |
+| `default_value` | float | `0.0` | Value (0–1 scale) to use when the funscript file is not found for the current video. Stored as 0–1; `current_value = default_value × 100`. |
+
+**Runtime fields (not persisted):**
+
+| Field | Description |
+|-------|-------------|
+| `file_path` | Absolute path to the matched funscript file (empty if not found) |
+| `actions` | Loaded keyframe list `[(at_ms, pos), ...]` |
+| `current_value` | Interpolated value 0–100 at current playback time |
+| `file_missing` | `True` when the expected file was not found for the current video |
+
+When `file_missing` is `True`, `current_value` is set to `default_value × 100`. The `on_missing_input` output behavior does **not** apply; the input is always available.
+
+### 5.2 Restim Input
+
+A `RestimInput` polls an HTTP endpoint (by default the [restim](https://github.com/diglet48/restim) local API) and evaluates one or more configurable conditions against the response. It produces `100.0` (ON) when all enabled conditions are met, or `0.0` (OFF) otherwise.
+
+**Configuration fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | str | — | Input name |
+| `enabled` | bool | `True` | Whether to poll and evaluate |
+| `url` | str | `http://localhost:12348/v1/status` | HTTP GET endpoint |
+| `poll_interval_s` | float | `2.0` | How often to poll the endpoint (seconds) |
+| `default_value` | bool | `False` | Output state when the endpoint is unreachable (`True` = ON = 100.0, `False` = OFF = 0.0) |
+| `conditions` | list[RestimCondition] | `[]` | Conditions to evaluate (all enabled conditions must pass) |
+
+**Restim API response format:**
+
+```json
+{
+  "playing": true,
+  "volume": {
+    "ui": 0.5,
+    "device": 0.10554568469524384
+  }
+}
+```
+
+The `device` key under `volume` is optional. If absent, any condition targeting device volume evaluates to `False`.
+
+**`RestimCondition` fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `field` | str | One of `"playing"`, `"volume_ui"`, `"volume_device"` |
+| `operator` | str | `"above"` or `"below"` (for volume fields); for `"playing"`: `"yes"`, `"no"`, or `"any"` |
+| `value` | float | Threshold value (0.0–1.0 for volume fields; ignored for `"playing"`) |
+| `enabled` | bool | Whether this condition is evaluated |
+
+All enabled conditions must be met for the input to output `100.0`. An empty or all-disabled conditions list always produces `100.0`.
+
+`RestimInput` is evaluated continuously regardless of player state (it reflects the restim application state, not the video player state).
+
+**Error handling:** When the HTTP request fails or returns a non-200 status, `is_error` is set to `True` and `current_value` is set based on `default_value`. Polling continues at the configured interval; `is_error` clears on the next successful response.
+
+### 5.3 Calculated Input
+
+A `CalculatedInput` combines two or more non-calculated inputs using boolean logic (AND / OR / XOR), evaluated left-to-right. Each input value is treated as a boolean: `≥ 50.0` = ON, `< 50.0` = OFF. The result is `100.0` (ON) or `0.0` (OFF).
+
+**Configuration fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | str | — | Input name |
+| `enabled` | bool | `True` | Whether to evaluate |
+| `entries` | list[CalculatedEntry] | — | At least 2 entries required |
+
+**`CalculatedEntry` fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `input_name` | str | Name of a non-calculated input to include |
+| `operator` | str | `"and"`, `"or"`, or `"xor"` (first entry's operator is ignored) |
+
+**Formula display:** Entries are combined left-to-right with automatic bracket insertion for clarity. Examples:
+
+- 2 entries A, B with OR: `(A or B)`
+- 3 entries A, B (OR), C (AND): `((A or B) and C)`
+
+`CalculatedInput` is evaluated continuously regardless of player state.
+
+### 5.4 Funscript File Discovery
 
 Funscript files follow the naming convention derived from restim:
 
@@ -309,19 +412,14 @@ When `PlayerState.file_path` changes to a new non-empty value, the `FunscriptEng
 1. Extract the directory and base name (without extension) from `file_path`.
 2. Glob for `{basename}.*.funscript` in the same directory.
 3. For each match, parse the axis name from the filename segment between the first and last `.`.
-4. Create `FunscriptAxis` entries for each discovered file.
-5. Emit an `axes_updated` signal with the new axis list.
+4. Update or create `FunscriptAxisInput` entries in-place in `app_state.inputs`; append new discovered entries.
+5. Emit an `inputs_updated` signal.
 
-If a previously loaded file path changes, the old axes are cleared before discovery runs.
+If a previously loaded file path changes, auto-discovered axis entries are re-validated for the new file.
 
-**Additional search paths:** Users may configure extra directories to search (e.g., a dedicated funscript library folder). Discovery checks the video's own directory first, then each additional search path in order, matching against the same basename pattern.
+**Additional search paths:** Users may configure extra directories to search. Discovery checks the video's own directory first, then each additional search path in order.
 
-**Manual axis management:** The user may:
-- Add an axis manually by specifying a name and file path.
-- Remove any axis (auto-discovered or manual).
-- Re-order axes (affects display only).
-
-### 5.2 Funscript Parsing
+### 5.5 Funscript Parsing
 
 A funscript file is a UTF-8 JSON document:
 
@@ -355,7 +453,7 @@ def load(self, path: str) -> list[tuple[int, int]]:
 
 The sorted action list is stored in memory for the lifetime of the axis. Files are re-read when the user explicitly refreshes or when the video changes.
 
-### 5.3 Value Interpolation
+### 5.6 Value Interpolation
 
 Given a playback position `t_ms` and the sorted action list, the current value is computed using **linear interpolation** between the two surrounding keyframes.
 
@@ -401,13 +499,13 @@ The result is a `float` in the range `[0.0, 100.0]`. Downstream consumers (outpu
 
 The output system separates two concerns:
 
-- **Signal processors**: transform a funscript axis value (0–100 float) into a discrete state (on/off, or a normalised 0–1 float for future analog outputs).
+- **Signal processors**: transform an input value (0–100 float) into a discrete state (on/off, or a normalised 0–1 float for future analog outputs).
 - **Device drivers**: receive a state change command and deliver it to a physical or virtual device.
 
 This separation allows any signal processor to be combined with any device driver. The current implemented combination is **Threshold → (Tasmota | MQTT)**.
 
 ```
-FunscriptAxis.value (float 0-100)
+AnyInput.current_value (float 0-100)
         |
         v
   SignalProcessor          (e.g., ThresholdSwitchProcessor)
@@ -647,24 +745,28 @@ async def _evaluation_loop(self) -> None:
             if output.driver is None:
                 continue
 
-            axis = self._resolve_axis(output.config.axis_name)
-            axis_available = (
-                axis is not None and axis.enabled and not axis.file_missing
-            )
+            inp = self._resolve_input(output.config.input_name)
+            inp_available = inp is not None and inp.enabled and not getattr(inp, "is_error", False)
 
-            if not axis_available:
-                forced = self._handle_missing_axis_behavior(output)
+            if not inp_available:
+                forced = self._handle_missing_input_behavior(output)
                 if forced is None:
                     continue  # hold
                 new_state = forced
-            elif is_playing:
-                new_state = output.processor.process(axis.current_value)
-                output.last_input_value = axis.current_value
+            elif isinstance(inp, FunscriptAxisInput):
+                # FunscriptAxisInput: only meaningful during active playback
+                if is_playing:
+                    new_state = output.processor.process(inp.current_value)
+                    output.last_input_value = inp.current_value
+                else:
+                    forced = self._handle_pause_behavior(output)
+                    if forced is None:
+                        continue  # hold: no command sent
+                    new_state = forced
             else:
-                forced = self._handle_pause_behavior(output)
-                if forced is None:
-                    continue  # hold: no command sent
-                new_state = forced
+                # RestimInput / CalculatedInput: always active regardless of player state
+                new_state = output.processor.process(inp.current_value)
+                output.last_input_value = inp.current_value
 
             output.last_output_state = new_state
 
@@ -699,8 +801,8 @@ def _handle_pause_behavior(self, output: OutputInstance) -> bool | None:
         case "force_on":  return True
         case "hold":      return None   # caller skips driver call
 
-def _handle_missing_axis_behavior(self, output: OutputInstance) -> bool | None:
-    match output.config.on_missing_axis:
+def _handle_missing_input_behavior(self, output: OutputInstance) -> bool | None:
+    match output.config.on_missing_input:
         case "force_off": return False
         case "force_on":  return True
         case "hold":      return None   # caller skips driver call
@@ -768,18 +870,47 @@ poll_interval_ms = 150
 [funscript]
 search_paths = []
 
-[[axes]]
+[[inputs]]
+type = "funscript_axis"
 name = "vibration"
-file_path = "C:/Videos/example.vibration.funscript"
 enabled = true
+default_value = 0.0
+
+[[inputs]]
+type = "restim"
+name = "restim_playing"
+enabled = true
+url = "http://localhost:12348/v1/status"
+poll_interval_s = 2.0
+default_value = false
+
+  [[inputs.conditions]]
+  field = "playing"
+  operator = "yes"
+  value = 0.0
+  enabled = true
+
+[[inputs]]
+type = "calculated"
+name = "combined"
+enabled = true
+
+  [[inputs.entries]]
+  input_name = "vibration"
+  operator = "and"
+
+  [[inputs.entries]]
+  input_name = "restim_playing"
+  operator = "and"
 
 [[outputs]]
 name = "Bed Vibrator"
 enabled = true
 type = "threshold_tasmota"
-axis_name = "vibration"
+input_name = "vibration"
 on_pause = "force_off"
 on_disconnect = "force_off"
+on_missing_input = "force_off"
 
   [outputs.threshold]
   threshold = 40.0
@@ -796,12 +927,13 @@ on_disconnect = "force_off"
 name = "Atmosphere Light"
 enabled = true
 type = "threshold_mqtt"
-axis_name = "stroke"
+input_name = "combined"
 on_pause = "hold"
 on_disconnect = "force_off"
+on_missing_input = "force_off"
 
   [outputs.threshold]
-  threshold = 60.0
+  threshold = 50.0
   active_high = true
   hysteresis = 0.0
 
@@ -816,18 +948,20 @@ on_disconnect = "force_off"
   retain = false
 ```
 
+**Backwards compatibility:** Config files using old key names (`[[axes]]`, `axis_name`, `on_missing_axis`) are transparently upgraded on read. New saves always use the current key names.
+
 **Startup sequence:**
 
 1. Load `config.toml`; if missing, create a default config with no outputs.
 2. Apply `player` settings to `PlayerConnectionManager`.
-3. Restore `axes` list (manual entries only; auto-discovery runs when a player connects and reports a file).
+3. Restore `inputs` list (all persisted entries; auto-discovery for `FunscriptAxisInput` runs when a player connects and reports a file).
 4. Instantiate all `outputs`, creating processor and driver objects.
-5. Start the player connection manager and output evaluation loop.
+5. Start the player connection manager, input poller, and output evaluation loop.
 
 **Save triggers:**
 
 - User clicks Save/Apply in the Settings tab.
-- Any structural change in the Axes or Outputs tabs (add, remove, reorder).
+- Any structural change in the Inputs or Outputs tabs (add, remove, edit).
 - Application shutdown (graceful).
 
 Configuration is written atomically: write to a temporary file, then rename to replace the existing config.
@@ -863,7 +997,7 @@ The main window is a fixed-size (or minimum-size) window with a tab widget conta
 ┌─────────────────────────────────────────────────────────┐
 │  funscript-gateway                              [_ □ ×]  │
 ├─────────────────────────────────────────────────────────┤
-│  [Status]  [Axes]  [Outputs]  [Settings]                 │
+│  [Status]  [Inputs]  [Outputs]  [Settings]                │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
 │  (tab content)                                          │
@@ -887,25 +1021,41 @@ The connection indicator dot is:
 - Yellow: `CONNECTED_AND_PAUSED` or `CONNECTED_BUT_NO_FILE_LOADED`
 - Red: `NOT_CONNECTED`
 
-### 8.4 Axes Tab
+### 8.4 Inputs Tab
 
-Displays all currently loaded funscript axes. Updated when axes are loaded/discovered and at the output loop tick (20 Hz) for live value bars.
+Displays all configured inputs. Updated when inputs are added/removed and at the output loop tick (20 Hz) for live value bars.
 
 **Table columns:**
 
 | Column | Content |
 |--------|---------|
-| Enabled | Checkbox toggle |
-| Name | Axis name string |
-| File | Truncated file path; tooltip shows full path |
-| Value | Live horizontal progress bar (0–100) + numeric label |
-| Status | "OK" / "File missing" / "Not loaded" |
+| En | Enabled checkbox |
+| Type | "Funscript Axis" / "Restim" / "Calculated" |
+| Name | Input name string |
+| Value | Live horizontal progress bar (0–100) with label |
+| Status | Type-specific status (see below) |
+| Used In | Count of outputs + calculated inputs referencing this input |
 
-**Toolbar actions above the table:**
+**Status column by input type:**
 
-- **Refresh** — re-run auto-discovery for the current file
-- **Add axis** — opens a dialog: enter name, select funscript file
-- **Remove selected** — removes the selected axis
+| Type | Status values |
+|------|---------------|
+| Funscript Axis | "OK" / "File missing" (amber) / "Not loaded" / "No file (default X.XX)" (grey) |
+| Restim | "OK" / "Error (default on\|off)" (red) |
+| Calculated | "N entr(y/ies)" |
+
+**Toolbar actions:**
+
+- **Add** — dropdown menu with three options: *Funscript Axis*, *Restim*, *Calculated*
+- **Edit** — opens the edit dialog for the selected input (single-selection only)
+- **Remove** — removes selected input(s); disabled if any selected input has "Used In" > 0
+- **Refresh** — re-run funscript file discovery for the current video
+
+**Input dialogs:**
+
+- *Funscript Axis*: name field, axis name hint, default value (0.0–1.0), enabled checkbox.
+- *Restim*: name, endpoint URL, poll interval, default state (off/on), enabled, conditions group (playing yes/no/any; volume UI above/below threshold; volume device above/below threshold — each condition has its own enable checkbox).
+- *Calculated*: name, enabled, dynamic entry rows (Add Entry button grows the list), live formula label. First entry has no operator; subsequent entries have an operator combo (AND/OR/XOR). Requires at least 2 entries.
 
 ### 8.5 Outputs Tab
 
@@ -918,8 +1068,8 @@ Displays all configured outputs. Updated at the 20 Hz loop tick.
 | Enabled | Checkbox toggle |
 | Name | Output name |
 | Type | e.g., "Threshold → Tasmota" |
-| Axis | Source axis name |
-| Input | Current axis value (numeric, 0–100) |
+| Input | Source input name |
+| Value | Current input value (numeric, 0–100) |
 | State | Current output state: ON (green) / OFF (grey) |
 
 **Toolbar actions:**
@@ -929,12 +1079,12 @@ Displays all configured outputs. Updated at the 20 Hz loop tick.
 - **Remove selected** — removes the selected output
 
 **Output configuration dialog** is a two-panel form:
-1. Left panel: output name, axis selection (dropdown of loaded axes), enabled checkbox, on-pause behavior, on-disconnect behavior, on-missing-axis behavior.
+1. Left panel: output name, input selection (dropdown of all configured inputs), enabled checkbox, on-pause behavior, on-disconnect behavior, on-missing-input behavior.
 2. Right panel: tabbed sub-form for threshold config and device driver config (Tasmota or MQTT).
 
 `on_pause` dropdown options: `hold` (default), `force_off`, `force_on`.
 `on_disconnect` dropdown options: `force_off` (default), `hold`, `force_on`.
-`on_missing_axis` dropdown options: `force_off` (default), `hold`, `force_on`.
+`on_missing_input` dropdown options: `force_off` (default), `hold`, `force_on`.
 
 ### 8.6 Settings Tab
 
@@ -989,17 +1139,60 @@ class PlayerState:
     playback_speed: float = 1.0
 ```
 
-### `FunscriptAxis`
+### Input Types
 
 ```python
 @dataclass
-class FunscriptAxis:
+class FunscriptAxisInput:
     name: str
-    file_path: str
     enabled: bool = True
+    default_value: float = 0.0          # 0–1 scale; current_value = default_value * 100 when file missing
+    # runtime fields (not persisted):
+    file_path: str = ""
     actions: list[tuple[int, int]] = field(default_factory=list)  # (at_ms, pos)
     current_value: float = 0.0          # interpolated at current_time_ms
     file_missing: bool = False
+
+FunscriptAxis = FunscriptAxisInput       # backwards-compat alias
+
+
+@dataclass
+class RestimCondition:
+    field: str                           # "playing" | "volume_ui" | "volume_device"
+    operator: str                        # "yes"|"no"|"any" for playing; "above"|"below" for volume
+    value: float = 0.0                   # threshold (ignored for "playing")
+    enabled: bool = True
+
+
+@dataclass
+class RestimInput:
+    name: str
+    enabled: bool = True
+    url: str = "http://localhost:12348/v1/status"
+    poll_interval_s: float = 2.0
+    default_value: bool = False          # output state when endpoint is unreachable
+    conditions: list[RestimCondition] = field(default_factory=list)
+    # runtime fields:
+    current_value: float = 0.0          # 100.0 = ON, 0.0 = OFF
+    is_error: bool = False              # True when last poll failed
+
+
+@dataclass
+class CalculatedEntry:
+    input_name: str
+    operator: str = "and"               # "and" | "or" | "xor"; first entry's operator is ignored
+
+
+@dataclass
+class CalculatedInput:
+    name: str
+    enabled: bool = True
+    entries: list[CalculatedEntry] = field(default_factory=list)  # minimum 2
+    # runtime field:
+    current_value: float = 0.0          # 100.0 = ON, 0.0 = OFF
+
+
+AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput]
 ```
 
 ### `PlayerConfig`
@@ -1058,10 +1251,10 @@ class OutputConfig:
     name: str = ""
     enabled: bool = True
     type: Literal["threshold_tasmota", "threshold_mqtt"] = "threshold_tasmota"
-    axis_name: str = ""
+    input_name: str = ""
     on_pause: Literal["hold", "force_on", "force_off"] = "hold"
     on_disconnect: Literal["hold", "force_on", "force_off"] = "force_off"
-    on_missing_axis: Literal["hold", "force_on", "force_off"] = "force_off"
+    on_missing_input: Literal["hold", "force_on", "force_off"] = "force_off"
     threshold: ThresholdSwitchConfig = field(default_factory=ThresholdSwitchConfig)
     tasmota: TasmotaOutputConfig = field(default_factory=TasmotaOutputConfig)
     mqtt: MqttOutputConfig = field(default_factory=MqttOutputConfig)
@@ -1074,7 +1267,7 @@ class OutputConfig:
 class GatewayConfig:
     player: PlayerConfig = field(default_factory=PlayerConfig)
     funscript_search_paths: list[str] = field(default_factory=list)
-    axes: list[FunscriptAxis] = field(default_factory=list)  # persisted manual entries
+    inputs: list = field(default_factory=list)   # list[AnyInput]; untyped to avoid forward-ref issues
     outputs: list[OutputConfig] = field(default_factory=list)
 ```
 
@@ -1088,8 +1281,8 @@ from PySide6.QtCore import QObject, Signal
 class AppState(QObject):
     # Emitted by PlayerConnectionManager whenever player state changes
     player_state_changed = Signal(PlayerState)
-    # Emitted by FunscriptEngine when the axis list changes (file change, add, remove)
-    axes_updated = Signal(list)          # list[FunscriptAxis]
+    # Emitted by FunscriptEngine or UI when the inputs list changes
+    inputs_updated = Signal(list)        # list[AnyInput]
     # Emitted by OutputManager at each 20 Hz tick for UI refresh
     outputs_updated = Signal()
 
@@ -1098,8 +1291,13 @@ class AppState(QObject):
         self.config: GatewayConfig = GatewayConfig()
         self.player_state: PlayerState = PlayerState()
         self.current_time_ms: int = 0    # authoritative playback position used by all consumers
-        self.axes: list[FunscriptAxis] = []
+        self.inputs: list = []           # same object as config.inputs — mutations always visible to both
         self.outputs: list[OutputInstance] = []
+
+    @property
+    def axes(self) -> list[FunscriptAxisInput]:
+        """Backwards-compat: return only FunscriptAxisInput entries."""
+        return [i for i in self.inputs if isinstance(i, FunscriptAxisInput)]
 ```
 
 `current_time_ms` is the single source of truth for playback position. It is written by `PlayerConnectionManager` and read by `FunscriptEngine` and `OutputManager`.
@@ -1140,9 +1338,11 @@ class AppState(QObject):
   - `force_on`: `driver.set_state(True)` called each tick.
 - Axis `current_value` is frozen at the last computed value while paused; it does not revert to 0.
 
-### Missing or Unavailable Axis
+### Missing or Unavailable Input
 
-Applies each evaluation tick when the output's assigned axis is not available — meaning the axis name is not in the axis list, the axis is disabled, or `file_missing = True`.
+Applies each evaluation tick when the output's assigned input is not available — meaning the input name is not in the inputs list, the input is disabled, or (for `RestimInput`) `is_error = True`.
+
+Note: `FunscriptAxisInput` is **always** considered available; the `default_value` field handles the file-missing case. `on_missing_input` only fires when the input name itself is absent from the inputs list.
 
 | Mode | Behavior |
 |------|----------|
@@ -1150,7 +1350,7 @@ Applies each evaluation tick when the output's assigned axis is not available �
 | `force_on` | Send on state each tick |
 | `hold` | No command sent; output retains its last state |
 
-This is evaluated before `on_pause`: if the axis is missing, `on_missing_axis` applies regardless of whether the player is playing or paused.
+This is evaluated before `on_pause`: if the input is missing/unavailable, `on_missing_input` applies regardless of player state.
 
 ### Player File Change
 
@@ -1232,6 +1432,9 @@ Main Thread
     └── asyncio Event Loop
           ├── PlayerConnectionManager task
           │     └── MpcHcBackend: asyncio.to_thread → urllib.request (thread pool)
+          ├── InputPoller task
+          │     └── RestimInput: asyncio.to_thread → urllib.request (thread pool, per poll_interval_s)
+          │     └── CalculatedInput: evaluated synchronously from RestimInput/FunscriptAxisInput values
           ├── OutputManager evaluation loop (50 ms timer)
           │     └── TasmotaDriver: asyncio.to_thread → urllib.request (thread pool)
           └── MqttDriver connect/disconnect: asyncio.to_thread (thread pool)
@@ -1297,15 +1500,14 @@ Candidates:
 - **Pattern generator**: ignores input value, drives output on a timed pattern when input exceeds a threshold
 - **Multi-axis combiner**: takes two axis values and combines them (e.g., max, sum, product) before threshold
 
-### Multi-Axis Math
+### Additional Input Types
 
-An `AxisExpression` layer can be inserted between the raw axis list and the output assignment. An expression references one or more named axes and computes a derived value:
+The `InputPoller` is designed to support additional polled input sources. New input types add:
+1. A new `*Input` dataclass (with `name`, `enabled`, `current_value`).
+2. A polling method in `InputPoller`.
+3. A dialog in `input_dialogs.py` and registration in `inputs_tab.py`.
 
-```
-derived_value = max(axes["stroke"], axes["vibration"])
-```
-
-The `OutputConfig.axis_name` field would be extended to accept either a raw axis name or an expression name.
+Candidates: serial port (e.g., Arduino sensor), WebSocket feed, OSC input.
 
 ### Scripted Outputs (User Python Expressions)
 
@@ -1345,6 +1547,7 @@ funscript-gateway/
 │       ├── outputs/
 │       │   ├── __init__.py
 │       │   ├── manager.py           # OutputManager: evaluation loop
+│       │   ├── input_poller.py      # InputPoller: polls RestimInput, evaluates CalculatedInput
 │       │   ├── threshold.py         # ThresholdSwitchProcessor
 │       │   ├── tasmota.py           # TasmotaDriver
 │       │   └── mqtt.py              # MqttDriver
@@ -1353,7 +1556,8 @@ funscript-gateway/
 │           ├── main_window.py       # MainWindow, tab container
 │           ├── tray.py              # SystemTrayIcon
 │           ├── status_tab.py
-│           ├── axes_tab.py
+│           ├── inputs_tab.py        # Inputs tab (replaces axes_tab.py)
+│           ├── input_dialogs.py     # FunscriptAxisDialog, RestimDialog, CalculatedDialog
 │           ├── outputs_tab.py
 │           ├── settings_tab.py
 │           └── output_dialog.py     # Add/Edit output dialog
