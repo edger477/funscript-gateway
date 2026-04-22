@@ -40,7 +40,7 @@ _NUM_COLS = 6
 _TYPE_LABELS = {
     "funscript": "Funscript Axis",
     "restim": "Restim",
-    "calculated": "Calculated",
+    "calculated": "Calculated (Logical)",
     "as5311": "AS5311",
 }
 

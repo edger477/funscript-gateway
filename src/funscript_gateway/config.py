@@ -77,6 +77,8 @@ def _calculated_input_from_dict(d: dict) -> CalculatedInput:
         CalculatedEntry(
             input_name=e.get("input_name", ""),
             operator=e.get("operator", "and"),
+            above=bool(e.get("above", True)),
+            threshold=float(e.get("threshold", 50.0)),
         )
         for e in d.get("entries", [])
     ]
@@ -257,7 +259,12 @@ def _input_to_dict(inp) -> dict:
             "name": inp.name,
             "enabled": inp.enabled,
             "entries": [
-                {"input_name": e.input_name, "operator": e.operator}
+                {
+                    "input_name": e.input_name,
+                    "operator": e.operator,
+                    "above": e.above,
+                    "threshold": e.threshold,
+                }
                 for e in inp.entries
             ],
         }

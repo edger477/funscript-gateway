@@ -76,9 +76,14 @@ def _eval_calculated(inp: CalculatedInput, value_map: dict[str, float]) -> float
     """
     if not inp.entries:
         return 0.0
-    result = value_map.get(inp.entries[0].input_name, 0.0) >= 50.0
+
+    def _to_bool(entry) -> bool:
+        v = value_map.get(entry.input_name, 0.0)
+        return v >= entry.threshold if entry.above else v < entry.threshold
+
+    result = _to_bool(inp.entries[0])
     for entry in inp.entries[1:]:
-        val = value_map.get(entry.input_name, 0.0) >= 50.0
+        val = _to_bool(entry)
         match entry.operator:
             case "and":
                 result = result and val

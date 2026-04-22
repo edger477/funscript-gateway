@@ -221,11 +221,10 @@ class RestimDialog(QDialog):
 # ---------------------------------------------------------------------------
 
 class CalculatedDialog(QDialog):
-    """Dialog for creating/editing a CalculatedInput.
+    """Dialog for creating/editing a CalculatedInput (Logical).
 
-    Entries are shown as a vertical list.  The first entry has no operator.
-    Subsequent entries show an operator selector before the input name.
-    The formula label updates live as entries are added/modified.
+    Each entry converts an input value to a boolean using a configurable
+    threshold and direction (≥ / <), then combines them with AND/OR/XOR.
     """
 
     def __init__(
@@ -235,11 +234,11 @@ class CalculatedDialog(QDialog):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Calculated Input")
-        self.setMinimumWidth(480)
+        self.setWindowTitle("Calculated Input (Logical)")
+        self.setMinimumWidth(540)
 
         cfg = config or CalculatedInput(name="")
-        self._available = [n for n in available_inputs]  # names of non-calculated inputs
+        self._available = list(available_inputs)
 
         layout = QVBoxLayout(self)
 
@@ -252,29 +251,27 @@ class CalculatedDialog(QDialog):
         top_form.addRow("Enabled:", self._enabled_check)
         layout.addLayout(top_form)
 
-        # Formula label
         self._formula_label = QLabel()
         self._formula_label.setWordWrap(True)
         self._formula_label.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self._formula_label)
 
-        # Entry rows container
         self._entries_widget = QWidget()
         self._entries_layout = QVBoxLayout(self._entries_widget)
         self._entries_layout.setContentsMargins(0, 0, 0, 0)
         self._entries_layout.setSpacing(4)
         layout.addWidget(self._entries_widget)
 
-        # Rows: list of (operator_combo | None, input_combo, remove_btn)
+        # Rows: list of (row_widget, op_combo|None, inp_combo, dir_combo, thresh_spin)
         self._rows: list[tuple] = []
 
         for entry in cfg.entries:
-            self._add_row(entry.input_name, entry.operator)
+            self._add_row(entry.input_name, entry.operator, entry.above, entry.threshold)
         if not self._rows:
-            self._add_row("", "and")
+            self._add_row("", "and", True, 50.0)
 
         add_btn = QPushButton("Add Entry")
-        add_btn.clicked.connect(lambda: self._add_row("", "and"))
+        add_btn.clicked.connect(lambda: self._add_row("", "and", True, 50.0))
         layout.addWidget(add_btn)
 
         buttons = QDialogButtonBox(
@@ -286,10 +283,11 @@ class CalculatedDialog(QDialog):
 
         self._update_formula()
 
-    def _add_row(self, input_name: str, operator: str) -> None:
+    def _add_row(self, input_name: str, operator: str, above: bool, threshold: float) -> None:
         row_widget = QWidget()
         row_h = QHBoxLayout(row_widget)
         row_h.setContentsMargins(0, 0, 0, 0)
+        row_h.setSpacing(4)
 
         is_first = len(self._rows) == 0
 
@@ -298,11 +296,12 @@ class CalculatedDialog(QDialog):
             op_combo = QComboBox()
             op_combo.addItems(["and", "or", "xor"])
             op_combo.setCurrentText(operator)
-            op_combo.setFixedWidth(60)
+            op_combo.setFixedWidth(56)
             op_combo.currentTextChanged.connect(self._update_formula)
             row_h.addWidget(op_combo)
         else:
             spacer = QLabel("      ")
+            spacer.setFixedWidth(56)
             row_h.addWidget(spacer)
 
         inp_combo = QComboBox()
@@ -313,56 +312,74 @@ class CalculatedDialog(QDialog):
         inp_combo.currentTextChanged.connect(self._update_formula)
         row_h.addWidget(inp_combo)
 
+        dir_combo = QComboBox()
+        dir_combo.addItems(["\u2265", "<"])   # ≥ / <
+        dir_combo.setCurrentIndex(0 if above else 1)
+        dir_combo.setFixedWidth(44)
+        dir_combo.currentTextChanged.connect(self._update_formula)
+        row_h.addWidget(dir_combo)
+
+        thresh_spin = QDoubleSpinBox()
+        thresh_spin.setRange(0.0, 100.0)
+        thresh_spin.setDecimals(1)
+        thresh_spin.setSingleStep(5.0)
+        thresh_spin.setValue(threshold)
+        thresh_spin.setFixedWidth(72)
+        thresh_spin.valueChanged.connect(self._update_formula)
+        row_h.addWidget(thresh_spin)
+
         remove_btn = QToolButton()
-        remove_btn.setText("✕")
+        remove_btn.setText("\u2715")
         remove_btn.clicked.connect(lambda: self._remove_row(row_widget))
         row_h.addWidget(remove_btn)
 
         self._entries_layout.addWidget(row_widget)
-        self._rows.append((row_widget, op_combo, inp_combo))
+        self._rows.append((row_widget, op_combo, inp_combo, dir_combo, thresh_spin))
         self._update_formula()
 
     def _remove_row(self, row_widget: QWidget) -> None:
-        for i, (rw, _, _) in enumerate(self._rows):
+        for i, (rw, *_) in enumerate(self._rows):
             if rw is row_widget:
                 self._rows.pop(i)
                 rw.deleteLater()
                 break
-        # If first row was removed, clear the operator on the new first row
+        # If first row was removed, replace its operator combo with a spacer
         if self._rows:
-            new_first_widget, old_op, inp = self._rows[0]
+            new_first_widget, old_op, inp, dir_combo, thresh_spin = self._rows[0]
             if old_op is not None:
-                # Replace the operator combo with a spacer for the new first row
-                layout = new_first_widget.layout()
-                layout.removeWidget(old_op)
+                lyt = new_first_widget.layout()
+                lyt.removeWidget(old_op)
                 old_op.deleteLater()
                 spacer = QLabel("      ")
-                layout.insertWidget(0, spacer)
-                self._rows[0] = (new_first_widget, None, inp)
+                spacer.setFixedWidth(56)
+                lyt.insertWidget(0, spacer)
+                self._rows[0] = (new_first_widget, None, inp, dir_combo, thresh_spin)
         self._update_formula()
 
     def _update_formula(self) -> None:
         if not self._rows:
             self._formula_label.setText("Formula: (empty)")
             return
-        parts = [inp.currentText() for _, _, inp in self._rows]
-        ops = [
-            (op.currentText() if op else "")
-            for _, op, _ in self._rows
+        parts = [
+            f"{inp.currentText()} {d.currentText()} {t.value():.1f}"
+            for _, _, inp, d, t in self._rows
         ]
-        formula = parts[0] if parts else ""
+        ops = [op.currentText() if op else "" for _, op, *_ in self._rows]
+        formula = parts[0]
         for i in range(1, len(parts)):
             formula = f"({formula} {ops[i]} {parts[i]})"
         self._formula_label.setText(f"Formula: {formula}")
 
     def get_config(self) -> CalculatedInput:
-        entries = []
-        for i, (_, op_combo, inp_combo) in enumerate(self._rows):
-            op = op_combo.currentText() if op_combo else "and"
-            entries.append(CalculatedEntry(
+        entries = [
+            CalculatedEntry(
                 input_name=inp_combo.currentText(),
-                operator=op,
-            ))
+                operator=op_combo.currentText() if op_combo else "and",
+                above=(dir_combo.currentText() == "\u2265"),
+                threshold=thresh_spin.value(),
+            )
+            for _, op_combo, inp_combo, dir_combo, thresh_spin in self._rows
+        ]
         return CalculatedInput(
             name=self._name_edit.text().strip(),
             enabled=self._enabled_check.isChecked(),
