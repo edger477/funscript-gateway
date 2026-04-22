@@ -123,8 +123,8 @@ class InputsTab(QWidget):
 
     def _used_in_count(self, inp_name: str) -> int:
         count = 0
-        for out in self._app_state.outputs:
-            if out.config.input_name == inp_name:
+        for out in self._app_state.config.outputs:
+            if out.input_name == inp_name:
                 count += 1
         for inp in self._app_state.inputs:
             if isinstance(inp, CalculatedInput):
