@@ -18,6 +18,7 @@ from pathlib import Path
 import tomli_w
 
 from funscript_gateway.models import (
+    As5311Input,
     CalculatedEntry,
     CalculatedInput,
     FunscriptAxisInput,
@@ -86,12 +87,24 @@ def _calculated_input_from_dict(d: dict) -> CalculatedInput:
     )
 
 
+def _as5311_input_from_dict(d: dict) -> As5311Input:
+    return As5311Input(
+        name=d.get("name", ""),
+        url=d.get("url", "ws://localhost:12346/sensors/as5311"),
+        enabled=bool(d.get("enabled", True)),
+        threshold_mm=float(d.get("threshold_mm", 0.0)),
+        range_mm=float(d.get("range_mm", 2.0)),
+    )
+
+
 def _input_from_dict(d: dict):
     input_type = d.get("type", "funscript_axis")
     if input_type == "restim":
         return _restim_input_from_dict(d)
     if input_type == "calculated":
         return _calculated_input_from_dict(d)
+    if input_type == "as5311":
+        return _as5311_input_from_dict(d)
     return _funscript_axis_input_from_dict(d)
 
 
@@ -247,6 +260,15 @@ def _input_to_dict(inp) -> dict:
                 {"input_name": e.input_name, "operator": e.operator}
                 for e in inp.entries
             ],
+        }
+    if isinstance(inp, As5311Input):
+        return {
+            "type": "as5311",
+            "name": inp.name,
+            "url": inp.url,
+            "enabled": inp.enabled,
+            "threshold_mm": inp.threshold_mm,
+            "range_mm": inp.range_mm,
         }
     return {}
 

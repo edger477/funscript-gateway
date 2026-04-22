@@ -80,7 +80,27 @@ class CalculatedInput:
     current_value: float = 0.0
 
 
-AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput]
+@dataclass
+class As5311Input:
+    """AS5311 magnetic linear encoder input via restim WebSocket.
+
+    Receives JSON messages ``{"x": <metres>}`` and maps position to 0–100.
+    Positions below threshold_mm map to 0; positions above threshold_mm + range_mm
+    map to 100; positions in between are interpolated linearly.
+    Multiple inputs may share the same WebSocket URL — they share one connection.
+    """
+    name: str
+    url: str = "ws://localhost:12346/sensors/as5311"
+    enabled: bool = True
+    threshold_mm: float = 0.0   # position (mm) that maps to 0
+    range_mm: float = 2.0       # span (mm) from threshold to full scale (100)
+    # Runtime fields (not persisted):
+    current_value: float = 0.0
+    last_position_mm: float = 0.0
+    is_error: bool = False
+
+
+AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput, As5311Input]
 
 
 PLAYER_DEFAULT_PORTS: dict[str, int] = {

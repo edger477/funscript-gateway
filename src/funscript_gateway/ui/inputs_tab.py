@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from funscript_gateway.models import (
+    As5311Input,
     CalculatedInput,
     FunscriptAxisInput,
     RestimInput,
@@ -40,6 +41,7 @@ _TYPE_LABELS = {
     "funscript": "Funscript Axis",
     "restim": "Restim",
     "calculated": "Calculated",
+    "as5311": "AS5311",
 }
 
 
@@ -50,6 +52,8 @@ def _input_type_key(inp) -> str:
         return "restim"
     if isinstance(inp, CalculatedInput):
         return "calculated"
+    if isinstance(inp, As5311Input):
+        return "as5311"
     return "unknown"
 
 
@@ -228,6 +232,20 @@ class InputsTab(QWidget):
             n = len(inp.entries)
             self._table.setItem(row, _COL_STATUS, QTableWidgetItem(f"{n} entr{'y' if n == 1 else 'ies'}"))
 
+        elif isinstance(inp, As5311Input):
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setValue(int(inp.current_value))
+            bar.setFormat(f"{inp.last_position_mm:.3f} mm")
+            self._table.setCellWidget(row, _COL_VALUE, bar)
+            if inp.is_error:
+                status = QTableWidgetItem("Error")
+                status.setForeground(Qt.GlobalColor.darkRed)
+            else:
+                hi = inp.threshold_mm + inp.range_mm
+                status = QTableWidgetItem(f"{inp.threshold_mm:.3g}–{hi:.4g} mm")
+            self._table.setItem(row, _COL_STATUS, status)
+
         # Used In
         used = self._used_in_count(inp.name)
         used_item = QTableWidgetItem(str(used) if used > 0 else "—")
@@ -249,21 +267,32 @@ class InputsTab(QWidget):
             bar.setValue(int(val))
             if isinstance(inp, FunscriptAxisInput):
                 bar.setFormat(f"{val:.1f}")
+            elif isinstance(inp, As5311Input):
+                bar.setFormat(f"{inp.last_position_mm:.3f} mm")
             else:
                 bar.setFormat("ON" if val >= 50.0 else "OFF")
 
-            # Refresh status for restim (error state can change)
+            # Refresh status for types whose error state can change at runtime
             if isinstance(inp, RestimInput):
-                if inp.is_error:
-                    default_txt = "on" if inp.default_value else "off"
-                    item = self._table.item(row, _COL_STATUS)
-                    if item:
+                item = self._table.item(row, _COL_STATUS)
+                if item:
+                    if inp.is_error:
+                        default_txt = "on" if inp.default_value else "off"
                         item.setText(f"Error (default {default_txt})")
                         item.setForeground(Qt.GlobalColor.darkRed)
-                else:
-                    item = self._table.item(row, _COL_STATUS)
-                    if item:
+                    else:
                         item.setText("OK")
+                        item.setForeground(self._table.palette().text().color())
+
+            elif isinstance(inp, As5311Input):
+                item = self._table.item(row, _COL_STATUS)
+                if item:
+                    if inp.is_error:
+                        item.setText("Error")
+                        item.setForeground(Qt.GlobalColor.darkRed)
+                    else:
+                        hi = inp.threshold_mm + inp.range_mm
+                        item.setText(f"{inp.threshold_mm:.3g}–{hi:.4g} mm")
                         item.setForeground(self._table.palette().text().color())
 
     # ------------------------------------------------------------------
@@ -279,6 +308,7 @@ class InputsTab(QWidget):
         menu = QMenu(self)
         menu.addAction("Funscript Axis", self._add_funscript_axis)
         menu.addAction("Restim", self._add_restim)
+        menu.addAction("AS5311 Sensor", self._add_as5311)
         menu.addAction("Calculated", self._add_calculated)
         btn = self.sender()
         pos = btn.mapToGlobal(btn.rect().bottomLeft()) if btn else self.cursor().pos()
@@ -298,6 +328,17 @@ class InputsTab(QWidget):
     def _add_restim(self) -> None:
         from funscript_gateway.ui.input_dialogs import RestimDialog
         dlg = RestimDialog(parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        inp = dlg.get_config()
+        if not inp.name:
+            QMessageBox.warning(self, "Invalid", "Input name cannot be empty.")
+            return
+        self._save_new_input(inp)
+
+    def _add_as5311(self) -> None:
+        from funscript_gateway.ui.input_dialogs import As5311Dialog
+        dlg = As5311Dialog(parent=self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         inp = dlg.get_config()
@@ -371,6 +412,14 @@ class InputsTab(QWidget):
             if len(new_inp.entries) < 2:
                 QMessageBox.warning(self, "Invalid", "A calculated input needs at least 2 entries.")
                 return
+            self._replace_input(row, inp, new_inp)
+
+        elif isinstance(inp, As5311Input):
+            from funscript_gateway.ui.input_dialogs import As5311Dialog
+            dlg = As5311Dialog(config=inp, parent=self)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            new_inp = dlg.get_config()
             self._replace_input(row, inp, new_inp)
 
     def _replace_input(self, row: int, old_inp, new_inp) -> None:

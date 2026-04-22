@@ -1,4 +1,5 @@
-"""InputPoller — polls RestimInputs and evaluates CalculatedInputs."""
+"""InputPoller — polls RestimInputs, manages AS5311 WebSocket connections,
+and evaluates CalculatedInputs."""
 
 from __future__ import annotations
 
@@ -8,7 +9,10 @@ import logging
 import urllib.request
 from typing import TYPE_CHECKING
 
+import websockets
+
 from funscript_gateway.models import (
+    As5311Input,
     CalculatedInput,
     FunscriptAxisInput,
     RestimCondition,
@@ -86,7 +90,7 @@ def _eval_calculated(inp: CalculatedInput, value_map: dict[str, float]) -> float
 
 
 class InputPoller:
-    """Polls RestimInputs at their configured interval and evaluates CalculatedInputs.
+    """Polls RestimInputs, holds AS5311 WebSocket connections, evaluates CalculatedInputs.
 
     Runs as a long-lived async task on the same event loop as the rest of the app.
     """
@@ -96,6 +100,7 @@ class InputPoller:
         self._running = False
         self._task: asyncio.Task | None = None
         self._last_poll: dict[str, float] = {}  # input name → last poll time
+        self._ws_tasks: dict[str, asyncio.Task] = {}  # input name → WS connection task
 
     async def start(self) -> None:
         self._running = True
@@ -103,30 +108,46 @@ class InputPoller:
 
     async def stop(self) -> None:
         self._running = False
+        for task in self._ws_tasks.values():
+            task.cancel()
         if self._task is not None:
             self._task.cancel()
-            try:
-                await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
-            self._task = None
+        tasks = list(self._ws_tasks.values())
+        if self._task is not None:
+            tasks.append(self._task)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._ws_tasks.clear()
+        self._task = None
 
     async def _loop(self) -> None:
         loop = asyncio.get_event_loop()
         while self._running:
             now = loop.time()
-            changed = False
             for inp in list(self._app_state.inputs):
                 if isinstance(inp, RestimInput) and inp.enabled:
                     last = self._last_poll.get(inp.name, -1e9)
                     if now - last >= inp.poll_interval_s:
                         await self._poll_restim(inp)
                         self._last_poll[inp.name] = now
-                        changed = True
 
-            if changed:
-                self._evaluate_calculated()
+            # One WS task per unique URL (shared across inputs with the same endpoint)
+            active_urls = {
+                inp.url
+                for inp in self._app_state.inputs
+                if isinstance(inp, As5311Input) and inp.enabled
+            }
+            for url in active_urls:
+                task = self._ws_tasks.get(url)
+                if task is None or task.done():
+                    self._ws_tasks[url] = asyncio.ensure_future(
+                        self._ws_loop_as5311(url)
+                    )
+            for url in list(self._ws_tasks):
+                if url not in active_urls:
+                    self._ws_tasks.pop(url).cancel()
 
+            self._evaluate_calculated()
             await asyncio.sleep(_LOOP_INTERVAL_S)
 
     async def _poll_restim(self, inp: RestimInput) -> None:
@@ -140,6 +161,44 @@ class InputPoller:
             logger.debug("Restim poll '%s' failed: %s", inp.name, exc)
             inp.is_error = True
             inp.current_value = 100.0 if inp.default_value else 0.0
+
+    def _as5311_inputs_for_url(self, url: str) -> list[As5311Input]:
+        return [
+            inp for inp in self._app_state.inputs
+            if isinstance(inp, As5311Input) and inp.url == url
+        ]
+
+    async def _ws_loop_as5311(self, url: str) -> None:
+        while self._running:
+            try:
+                async with websockets.connect(url) as ws:
+                    for inp in self._as5311_inputs_for_url(url):
+                        inp.is_error = False
+                    logger.debug("AS5311: connected to %s", url)
+                    async for message in ws:
+                        if not self._running:
+                            return
+                        data = json.loads(message)
+                        x_m = float(data.get("x", 0.0))
+                        x_mm = x_m * 1000.0
+                        for inp in self._as5311_inputs_for_url(url):
+                            inp.last_position_mm = x_mm
+                            if inp.range_mm > 0:
+                                inp.current_value = max(
+                                    0.0,
+                                    min(100.0, (x_mm - inp.threshold_mm) / inp.range_mm * 100.0),
+                                )
+                            else:
+                                inp.current_value = 0.0
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:  # noqa: BLE001
+                if not self._running:
+                    return
+                for inp in self._as5311_inputs_for_url(url):
+                    inp.is_error = True
+                logger.debug("AS5311 WS '%s' error: %s", url, exc)
+                await asyncio.sleep(5.0)
 
     def _evaluate_calculated(self) -> None:
         # Build value lookup from all non-calculated inputs

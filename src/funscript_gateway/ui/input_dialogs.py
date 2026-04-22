@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from funscript_gateway.models import (
+    As5311Input,
     CalculatedEntry,
     CalculatedInput,
     FunscriptAxisInput,
@@ -366,4 +367,80 @@ class CalculatedDialog(QDialog):
             name=self._name_edit.text().strip(),
             enabled=self._enabled_check.isChecked(),
             entries=entries,
+        )
+
+
+# ---------------------------------------------------------------------------
+# AS5311 dialog
+# ---------------------------------------------------------------------------
+
+class As5311Dialog(QDialog):
+    """Dialog for creating/editing an As5311Input (restim magnetic linear encoder)."""
+
+    def __init__(self, config: As5311Input | None = None, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("AS5311 Sensor Input")
+        self.setMinimumWidth(400)
+
+        cfg = config or As5311Input(name="")
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self._name_edit = QLineEdit(cfg.name)
+        form.addRow("Name:", self._name_edit)
+
+        self._url_edit = QLineEdit(cfg.url)
+        form.addRow("WebSocket URL:", self._url_edit)
+
+        self._threshold_spin = QDoubleSpinBox()
+        self._threshold_spin.setRange(0.0, 999.0)
+        self._threshold_spin.setDecimals(3)
+        self._threshold_spin.setSuffix(" mm")
+        self._threshold_spin.setSingleStep(0.1)
+        self._threshold_spin.setValue(cfg.threshold_mm)
+        self._threshold_spin.setToolTip("Position (mm) that maps to output value 0.")
+        form.addRow("Threshold (→ 0):", self._threshold_spin)
+
+        self._range_spin = QDoubleSpinBox()
+        self._range_spin.setRange(0.01, 1000.0)
+        self._range_spin.setDecimals(3)
+        self._range_spin.setSuffix(" mm")
+        self._range_spin.setSingleStep(0.5)
+        self._range_spin.setValue(cfg.range_mm)
+        self._range_spin.setToolTip(
+            "Span (mm) from threshold to full scale.\n"
+            "threshold + range maps to output value 100.\n"
+            "AS5311 natural range is 2 mm per pole pair."
+        )
+        form.addRow("Range (→ 100):", self._range_spin)
+
+        self._enabled_check = QCheckBox()
+        self._enabled_check.setChecked(cfg.enabled)
+        form.addRow("Enabled:", self._enabled_check)
+
+        hint = QLabel(
+            "<small>Connects to the restim AS5311 magnetic linear encoder WebSocket.<br>"
+            "Message format: <tt>{\"x\": 0.000001}</tt> (position in metres).<br>"
+            "Output = (position − threshold) ÷ range × 100, clamped to 0–100.<br>"
+            "Inputs sharing the same URL share one WebSocket connection.</small>"
+        )
+        hint.setTextFormat(Qt.TextFormat.RichText)
+        hint.setWordWrap(True)
+        form.addRow("", hint)
+
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_config(self) -> As5311Input:
+        return As5311Input(
+            name=self._name_edit.text().strip(),
+            url=self._url_edit.text().strip(),
+            enabled=self._enabled_check.isChecked(),
+            threshold_mm=self._threshold_spin.value(),
+            range_mm=self._range_spin.value(),
         )
