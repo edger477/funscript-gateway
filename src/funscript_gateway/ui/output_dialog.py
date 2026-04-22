@@ -13,8 +13,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QSpinBox,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -144,6 +146,22 @@ class OutputDialog(QDialog):
         self._on_driver_type_changed(self._initial_config.type)
         return w
 
+    _PULSE_MODE_HELP = (
+        "Repeat Interval — Pulse Mode Keep-Alive\n\n"
+        "If you want the Tasmota switch to automatically return to OFF even if "
+        "the network disconnects or this app crashes, configure the device in "
+        "pulse mode via the Tasmota console:\n\n"
+        "    PulseTime1 160  →  switch turns off after 60 seconds\n"
+        "    PulseTime1 130  →  switch turns off after 30 seconds\n\n"
+        "(PulseTime values 112–65535 encode seconds as value − 100,\n"
+        " so PulseTime 160 = 60 s, PulseTime 130 = 30 s.)\n\n"
+        "When pulse mode is active, this app must repeatedly send the Power ON "
+        "command to keep the relay closed while the output is active. Set the "
+        "repeat interval to a value shorter than the pulse duration — for "
+        "example, if you use PulseTime1 160 (60 s), set repeat interval to 45 s.\n\n"
+        "Set to 0 to disable (command is only sent on state change)."
+    )
+
     def _build_tasmota_group(self) -> QGroupBox:
         group = QGroupBox("Tasmota")
         form = QFormLayout(group)
@@ -162,7 +180,28 @@ class OutputDialog(QDialog):
         self._tasmota_timeout.setDecimals(1)
         self._tasmota_timeout.setValue(cfg.timeout_s)
         form.addRow("Timeout (s):", self._tasmota_timeout)
+
+        self._tasmota_repeat = QSpinBox()
+        self._tasmota_repeat.setRange(0, 3600)
+        self._tasmota_repeat.setValue(cfg.repeat_interval_s)
+        self._tasmota_repeat.setSpecialValueText("Off (0)")
+        self._tasmota_repeat.setSuffix(" s")
+
+        help_btn = QToolButton()
+        help_btn.setText("?")
+        help_btn.setToolTip("Click for help on pulse mode repeat interval")
+        help_btn.clicked.connect(self._show_pulse_mode_help)
+
+        repeat_row = QWidget()
+        repeat_layout = QHBoxLayout(repeat_row)
+        repeat_layout.setContentsMargins(0, 0, 0, 0)
+        repeat_layout.addWidget(self._tasmota_repeat)
+        repeat_layout.addWidget(help_btn)
+        form.addRow("Repeat interval:", repeat_row)
         return group
+
+    def _show_pulse_mode_help(self) -> None:
+        QMessageBox.information(self, "Repeat Interval — Pulse Mode", self._PULSE_MODE_HELP)
 
     def _build_mqtt_group(self) -> QGroupBox:
         group = QGroupBox("MQTT")
@@ -222,6 +261,7 @@ class OutputDialog(QDialog):
             host=self._tasmota_host.text().strip(),
             device_index=self._tasmota_index.value(),
             timeout_s=self._tasmota_timeout.value(),
+            repeat_interval_s=self._tasmota_repeat.value(),
         )
         mqtt = MqttOutputConfig(
             broker_host=self._mqtt_broker_host.text().strip(),

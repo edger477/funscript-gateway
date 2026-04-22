@@ -61,6 +61,7 @@ class TasmotaOutputConfig:
     host: str = ""
     device_index: int = 1
     timeout_s: float = 3.0
+    repeat_interval_s: int = 0
 
 
 @dataclass

@@ -493,6 +493,15 @@ The `TasmotaDriver` controls a Tasmota-flashed smart relay via its HTTP command 
 | `host` | str | — | IP address or hostname of the Tasmota device |
 | `device_index` | int | `1` | Power channel index (1–8); use 1 for single-channel devices |
 | `timeout_s` | float | `3.0` | HTTP request timeout in seconds |
+| `repeat_interval_s` | int | `0` | When > 0, re-sends the ON command every N seconds while the output is active. Required for pulse-mode devices (see below). `0` = disabled. |
+
+**Pulse mode keep-alive:**
+
+Tasmota supports a hardware-safe auto-off timer called *PulseTime*. When configured (e.g. `PulseTime1 160` in the Tasmota console = auto-off after 60 s), the relay returns to OFF on its own if it stops receiving renewal commands — protecting against network failures or application crashes.
+
+When using pulse mode, set `repeat_interval_s` to a value shorter than the pulse duration so the driver continuously renews the ON command while the output is active. Example: `PulseTime1 160` (60 s timeout) → set `repeat_interval_s = 45`.
+
+PulseTime encoding: values 112–65535 encode seconds as `value − 100`, so `PulseTime 160 = 60 s`, `PulseTime 130 = 30 s`.
 
 **Tasmota HTTP API:**
 
@@ -521,16 +530,24 @@ The driver sends commands only when the desired state differs from the last succ
 **Implementation sketch:**
 
 ```python
+import time
 import urllib.request
 
 class TasmotaDriver:
     def __init__(self, config: TasmotaOutputConfig) -> None:
         self.config = config
         self._last_sent: bool | None = None
+        self._last_send_time: float = 0.0
 
     async def set_state(self, on: bool) -> None:
+        repeat = self.config.repeat_interval_s
+        now = time.monotonic()
+
         if on == self._last_sent:
-            return
+            # Re-send ON if repeat interval elapsed; always skip OFF repeats.
+            if not on or repeat <= 0 or (now - self._last_send_time) < repeat:
+                return
+
         cmd = "On" if on else "Off"
         url = (
             f"http://{self.config.host}/cm"
@@ -544,9 +561,10 @@ class TasmotaDriver:
 
         await asyncio.to_thread(do_request)
         self._last_sent = on
+        self._last_send_time = now
 ```
 
-`asyncio.to_thread` offloads the blocking `urllib.request` call to a thread pool worker, keeping the asyncio event loop unblocked. On HTTP error the exception propagates to the evaluation loop, `_last_sent` is not updated, and the next cycle will retry.
+`asyncio.to_thread` offloads the blocking `urllib.request` call to a thread pool worker, keeping the asyncio event loop unblocked. On HTTP error the exception propagates to the evaluation loop, `_last_sent` and `_last_send_time` are not updated, and the next cycle will retry.
 
 ### 6.4 MQTT Switch Driver
 
@@ -772,6 +790,7 @@ on_disconnect = "force_off"
   host = "192.168.1.42"
   device_index = 1
   timeout_s = 3.0
+  repeat_interval_s = 0
 
 [[outputs]]
 name = "Atmosphere Light"
@@ -1014,6 +1033,7 @@ class TasmotaOutputConfig:
     host: str = ""
     device_index: int = 1
     timeout_s: float = 3.0
+    repeat_interval_s: int = 0          # 0 = disabled; >0 = re-send ON every N seconds (pulse mode)
 
 @dataclass
 class MqttOutputConfig:

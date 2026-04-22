@@ -56,6 +56,7 @@ def _output_from_dict(d: dict) -> OutputConfig:
         host=tasmota_d.get("host", ""),
         device_index=int(tasmota_d.get("device_index", 1)),
         timeout_s=float(tasmota_d.get("timeout_s", 3.0)),
+        repeat_interval_s=int(tasmota_d.get("repeat_interval_s", 0)),
     )
     mqtt = MqttOutputConfig(
         broker_host=mqtt_d.get("broker_host", ""),
@@ -158,6 +159,7 @@ def _output_to_dict(output: OutputConfig) -> dict:
             "host": output.tasmota.host,
             "device_index": output.tasmota.device_index,
             "timeout_s": output.tasmota.timeout_s,
+            "repeat_interval_s": output.tasmota.repeat_interval_s,
         },
         "mqtt": {
             "broker_host": output.mqtt.broker_host,

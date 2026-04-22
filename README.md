@@ -128,6 +128,20 @@ Sends commands directly to Tasmota's HTTP API. No broker required.
 | **Host** | Hostname or IP of the Tasmota device (e.g. `tasmota-[device-id]` or `192.168.1.[x]`) |
 | **Device index** | Power channel index, usually `1` |
 | **Timeout (s)** | HTTP request timeout |
+| **Repeat interval (s)** | When > 0, re-sends the ON command every N seconds while the output is active. Required when the device is in pulse mode (see below). `0` = disabled. |
+
+#### Pulse mode (automatic hardware safety off)
+
+If you want the device to turn itself off automatically even if your network or this app fails, configure Tasmota's *PulseTime* in the Tasmota console:
+
+```
+PulseTime1 160   # channel 1 auto-off after 60 seconds
+PulseTime1 130   # channel 1 auto-off after 30 seconds
+```
+
+*(PulseTime values 112–65535 encode seconds as `value − 100`.)*
+
+When pulse mode is active, funscript-gateway must repeatedly send the ON command to keep the relay closed. Set **Repeat interval** to a value shorter than the pulse duration — e.g. if you use `PulseTime1 160` (60 s), set repeat interval to `45`.
 
 Example output config for a Tasmota plug on the local network:
 
@@ -150,6 +164,7 @@ hysteresis = 10.0
 host = "tasmota-[device-hostname]"
 device_index = 1
 timeout_s = 3.0
+repeat_interval_s = 0   # set to e.g. 45 if using PulseTime1 160
 ```
 
 ### MQTT
