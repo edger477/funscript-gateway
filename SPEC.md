@@ -1,7 +1,7 @@
 # funscript-gateway — Technical Specification
 
-**Version:** 0.1.2  
-**Date:** 2026-04-22  
+**Version:** 0.1.3  
+**Date:** 2026-04-23  
 **Status:** Draft
 
 ---
@@ -20,9 +20,10 @@
    - 5.2 [Restim Input](#52-restim-input)
    - 5.3 [Calculated Input (Logical)](#53-calculated-input-logical)
    - 5.4 [AS5311 Magnetic Encoder Input](#54-as5311-magnetic-encoder-input)
-   - 5.5 [Funscript File Discovery](#55-funscript-file-discovery)
-   - 5.6 [Funscript Parsing](#56-funscript-parsing)
-   - 5.7 [Value Interpolation](#57-value-interpolation)
+   - 5.5 [Calculated Input (Arithmetic)](#55-calculated-input-arithmetic)
+   - 5.6 [Funscript File Discovery](#56-funscript-file-discovery)
+   - 5.7 [Funscript Parsing](#57-funscript-parsing)
+   - 5.8 [Value Interpolation](#58-value-interpolation)
 6. [Output System](#6-output-system)
    - 6.1 [Plugin Architecture](#61-plugin-architecture)
    - 6.2 [Threshold Switch Logic](#62-threshold-switch-logic)
@@ -297,7 +298,7 @@ The active backend is determined by `GatewayConfig.player.type` (`"heresphere"` 
 
 ## 5. Input System
 
-The application supports four types of inputs. All inputs produce a `current_value: float` in the range `[0.0, 100.0]`. Outputs read from any input type uniformly using the input's name.
+The application supports five types of inputs. All inputs produce a `current_value: float` in the range `[0.0, 100.0]`. Outputs read from any input type uniformly using the input's name.
 
 ### 5.1 Funscript Axis Input
 
@@ -379,7 +380,7 @@ A `CalculatedInput` combines two or more non-calculated inputs using boolean log
 |-------|------|---------|-------------|
 | `name` | str | — | Input name |
 | `enabled` | bool | `True` | Whether to evaluate |
-| `entries` | list[CalculatedEntry] | — | At least 2 entries required |
+| `entries` | list[CalculatedEntry] | — | At least 1 entry required |
 
 **`CalculatedEntry` fields:**
 
@@ -437,7 +438,44 @@ Positions below `threshold_mm` map to 0; positions above `threshold_mm + range_m
 
 **Error handling:** On WebSocket disconnect or error, `is_error` is set to `True` and `current_value` is not updated. The poller retries the connection after 5 seconds.
 
-### 5.5 Funscript File Discovery
+### 5.5 Calculated Input (Arithmetic)
+
+An `ArithmeticInput` computes a weighted average of selected inputs. Each entry contributes its referenced input's current value multiplied by a configurable integer weight (multiplier); the sum is divided by the total weight and clamped to 0–100. Unlike `CalculatedInput`, the output is a continuous value, not a boolean.
+
+Arithmetic inputs may reference primary inputs (`FunscriptAxisInput`, `RestimInput`, `As5311Input`) and logical calculated inputs (`CalculatedInput`), but not other arithmetic inputs, to prevent cycles. Evaluation order in `InputPoller` is: primary inputs → logical → arithmetic.
+
+**Configuration fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | str | — | Input name |
+| `enabled` | bool | `True` | Whether to evaluate |
+| `entries` | list[ArithmeticEntry] | — | At least 1 entry required |
+
+**`ArithmeticEntry` fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `input_name` | str | — | Name of a primary or logical-calculated input to include |
+| `multiplier` | int | `1` | Weight for this entry: `1`, `2`, `3`, or `4` |
+
+**Formula:**
+
+```
+output = Σ(value_i × mult_i) / Σ(mult_i),  clamped to [0, 100]
+```
+
+For example, two entries with multipliers 2 and 1:
+
+```
+output = (value_A × 2 + value_B × 1) / 3
+```
+
+The live formula label in the dialog shows the expression, e.g. `(A × 2 + B) ÷ 3`.
+
+`ArithmeticInput` is evaluated continuously regardless of player state.
+
+### 5.6 Funscript File Discovery
 
 Funscript files follow the naming convention derived from restim:
 
@@ -465,7 +503,7 @@ If a previously loaded file path changes, auto-discovered axis entries are re-va
 
 **Additional search paths:** Users may configure extra directories to search. Discovery checks the video's own directory first, then each additional search path in order.
 
-### 5.6 Funscript Parsing
+### 5.7 Funscript Parsing
 
 A funscript file is a UTF-8 JSON document:
 
@@ -499,7 +537,7 @@ def load(self, path: str) -> list[tuple[int, int]]:
 
 The sorted action list is stored in memory for the lifetime of the axis. Files are re-read when the user explicitly refreshes or when the video changes.
 
-### 5.7 Value Interpolation
+### 5.8 Value Interpolation
 
 Given a playback position `t_ms` and the sorted action list, the current value is computed using **linear interpolation** between the two surrounding keyframes.
 
@@ -1091,7 +1129,7 @@ Displays all configured inputs. Updated when inputs are added/removed and at the
 | Column | Content |
 |--------|---------|
 | En | Enabled checkbox |
-| Type | "Funscript Axis" / "Restim" / "Calculated (Logical)" / "AS5311" |
+| Type | "Funscript Axis" / "Restim" / "Calculated (Logical)" / "AS5311" / "Calculated (Arithmetic)" |
 | Name | Input name string |
 | Value | Live horizontal progress bar (0–100) with label |
 | Status | Type-specific status (see below) |
@@ -1105,10 +1143,11 @@ Displays all configured inputs. Updated when inputs are added/removed and at the
 | Restim | "OK" / "Error (default on\|off)" (red) |
 | Calculated (Logical) | "N entr(y/ies)" |
 | AS5311 | "X.Xg–Y.Yg mm" range summary / "Error" (red) |
+| Calculated (Arithmetic) | "N entries, ÷W" (where W = total weight divisor) |
 
 **Toolbar actions:**
 
-- **Add** — dropdown menu with four options: *Funscript Axis*, *Restim*, *Calculated (Logical)*, *AS5311 Sensor*
+- **Add** — dropdown menu with five options: *Funscript Axis*, *Restim*, *Calculated - Logical*, *Calculated - Arithmetic*, *AS5311 Sensor*
 - **Edit** — opens the edit dialog for the selected input (single-selection only)
 - **Remove** — removes selected input(s); disabled if any selected input has "Used In" > 0
 - **Refresh** — re-run funscript file discovery for the current video
@@ -1117,7 +1156,8 @@ Displays all configured inputs. Updated when inputs are added/removed and at the
 
 - *Funscript Axis*: name field, axis name hint, default value (0.0–1.0), enabled checkbox.
 - *Restim*: name, endpoint URL, poll interval, default state (off/on), enabled, conditions group (playing yes/no/any; volume UI above/below threshold; volume device above/below threshold — each condition has its own enable checkbox).
-- *Calculated (Logical)*: name, enabled, dynamic entry rows (Add Entry button grows the list), live formula label. Each row has: operator combo (AND/OR/XOR, absent for first entry), input selection, direction (≥ / <), and threshold (0–100). Requires at least 2 entries.
+- *Calculated (Logical)*: name, enabled, dynamic entry rows (Add Entry button grows the list), live formula label. Each row has: operator combo (AND/OR/XOR, absent for first entry), input selection, direction (≥ / <), and threshold (0–100). Requires at least 1 entry; entries may only reference primary (non-calculated) inputs.
+- *Calculated (Arithmetic)*: name, enabled, dynamic entry rows (Add Entry button grows the list), live formula label. Each row has: input selection (combo, expanding) and multiplier (combo, 1–4, fixed 60 px). Entries may reference primary inputs and Calculated (Logical) inputs. Requires at least 1 entry.
 - *AS5311 Sensor*: name, WebSocket URL, threshold (mm), range (mm), enabled checkbox. Value bar shows position in mm; status shows threshold–range bounds.
 
 ### 8.5 Outputs Tab
@@ -1255,7 +1295,7 @@ class CalculatedEntry:
 class CalculatedInput:
     name: str
     enabled: bool = True
-    entries: list[CalculatedEntry] = field(default_factory=list)  # minimum 2
+    entries: list[CalculatedEntry] = field(default_factory=list)  # minimum 1
     # runtime field:
     current_value: float = 0.0          # 100.0 = ON, 0.0 = OFF
 
@@ -1273,7 +1313,22 @@ class As5311Input:
     is_error: bool = False
 
 
-AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput, As5311Input]
+@dataclass
+class ArithmeticEntry:
+    input_name: str
+    multiplier: int = 1                  # 1–4; weight for this entry
+
+
+@dataclass
+class ArithmeticInput:
+    name: str
+    enabled: bool = True
+    entries: list[ArithmeticEntry] = field(default_factory=list)  # minimum 1
+    # runtime field:
+    current_value: float = 0.0          # weighted average, 0–100
+
+
+AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput, As5311Input, ArithmeticInput]
 ```
 
 ### `PlayerConfig`
@@ -1516,7 +1571,8 @@ Main Thread
           ├── InputPoller task
           │     ├── RestimInput: asyncio.to_thread → urllib.request (thread pool, per poll_interval_s)
           │     ├── As5311Input: one asyncio WS task per unique URL (websockets library)
-          │     └── CalculatedInput: evaluated synchronously each tick from other inputs' current_value
+          │     ├── CalculatedInput (Logical): evaluated synchronously each tick from primary inputs' current_value
+          │     └── ArithmeticInput: evaluated synchronously after logical inputs (two-pass order)
           ├── OutputManager evaluation loop (50 ms timer)
           │     └── TasmotaDriver: asyncio.to_thread → urllib.request (thread pool)
           └── MqttDriver connect/disconnect: asyncio.to_thread (thread pool)
@@ -1639,7 +1695,7 @@ funscript-gateway/
 │           ├── tray.py              # SystemTrayIcon
 │           ├── status_tab.py
 │           ├── inputs_tab.py        # Inputs tab (replaces axes_tab.py)
-│           ├── input_dialogs.py     # FunscriptAxisDialog, RestimDialog, CalculatedDialog, As5311Dialog
+│           ├── input_dialogs.py     # FunscriptAxisDialog, RestimDialog, CalculatedDialog, As5311Dialog, ArithmeticDialog
 │           ├── outputs_tab.py
 │           ├── settings_tab.py
 │           └── output_dialog.py     # Add/Edit output dialog

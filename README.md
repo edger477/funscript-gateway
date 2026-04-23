@@ -20,7 +20,7 @@ When you play a video in a supported player, funscript-gateway reads the associa
 
 ```
 Video player ──► funscript-gateway ──► evaluates input value at current timestamp
-                                    │   (funscript axis / restim poll / calculated logic)
+                                    │   (funscript axis / restim poll / encoder / calculated)
                                     └──► applies threshold + hysteresis ──► ON / OFF
                                                                          └──► Tasmota HTTP
                                                                          └──► MQTT publish
@@ -30,8 +30,9 @@ Video player ──► funscript-gateway ──► evaluates input value at curr
 2. For **Funscript Axis** inputs: the gateway looks up the funscript file (e.g. `myvideo.volume.funscript`) and interpolates its value (0–100) at the current timestamp.
 3. For **Restim** inputs: the gateway polls the configured HTTP endpoint at the configured interval and evaluates conditions (playing state, volume thresholds).
 4. For **AS5311** inputs: the gateway receives position data from a magnetic linear encoder via WebSocket and maps it to 0–100 using configurable threshold and range.
-5. For **Calculated (Logical)** inputs: the gateway combines two or more inputs using AND / OR / XOR logic, converting each input to a boolean with its own configurable threshold and direction.
-6. Every 50 ms, each output reads its assigned input value and applies a threshold + hysteresis to produce ON or OFF, which is sent to the device.
+5. For **Calculated (Logical)** inputs: the gateway combines one or more inputs using AND / OR / XOR logic, converting each input to a boolean with its own configurable threshold and direction.
+6. For **Calculated (Arithmetic)** inputs: the gateway computes a weighted average of selected inputs — each entry has a configurable multiplier (1–4) — and outputs the result as a continuous 0–100 value.
+7. Every 50 ms, each output reads its assigned input value and applies a threshold + hysteresis to produce ON or OFF, which is sent to the device.
 
 ### Funscript file naming
 
@@ -91,7 +92,7 @@ In funscript-gateway → **Settings** tab:
 
 ## Inputs
 
-In the **Inputs** tab, configure the data sources that outputs read from. Three input types are available:
+In the **Inputs** tab, configure the data sources that outputs read from. Five input types are available:
 
 ### Funscript Axis
 
@@ -132,14 +133,25 @@ Multiple inputs pointing to the same URL share one WebSocket connection.
 
 ### Calculated (Logical)
 
-Combines two or more non-calculated inputs using AND / OR / XOR, evaluated left-to-right. Each entry first converts its input's continuous 0–100 value to a boolean using a configurable threshold and direction, then combines the results. Produces ON (100) or OFF (0). Evaluated continuously regardless of player state.
+Combines one or more non-calculated inputs using AND / OR / XOR, evaluated left-to-right. Each entry first converts its input's continuous 0–100 value to a boolean using a configurable threshold and direction, then combines the results. Produces ON (100) or OFF (0). Evaluated continuously regardless of player state.
 
 | Setting | Description |
 |---------|-------------|
 | **Name** | Input name |
-| **Entries** | At least 2 non-calculated inputs. First entry has no operator; subsequent entries specify AND / OR / XOR. Each entry also has a direction (≥ / <) and threshold (0–100) for the boolean conversion. |
+| **Entries** | At least 1 non-calculated input. First entry has no operator; subsequent entries specify AND / OR / XOR. Each entry also has a direction (≥ / <) and threshold (0–100) for the boolean conversion. |
 
 The formula is shown live in the dialog, e.g. `(vibration ≥ 60.0 or restim < 30.0)`.
+
+### Calculated (Arithmetic)
+
+Computes a weighted average of selected inputs. Each entry contributes its current value multiplied by a configurable weight (1–4); the result is divided by the total weight and clamped to 0–100. Useful for blending multiple continuous inputs into a single value. Arithmetic inputs can reference both primary inputs and Calculated (Logical) inputs. Evaluated continuously regardless of player state.
+
+| Setting | Description |
+|---------|-------------|
+| **Name** | Input name |
+| **Entries** | At least 1 input. Each entry has an input selection and a multiplier (1–4). |
+
+Formula: `output = Σ(value_i × mult_i) / Σ(mult_i)`, clamped to 0–100. The live formula label shows e.g. `(A × 2 + B) ÷ 3`.
 
 ---
 
