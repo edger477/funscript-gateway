@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import urllib.request
 
 from funscript_gateway.app_state import AppState
 from funscript_gateway.funscript.engine import FunscriptEngine, interpolate
@@ -33,6 +35,7 @@ class OutputManager:
         self._task: asyncio.Task | None = None
         self._mqtt_drivers: list[MqttDriver] = []
         self._was_connected: bool = False
+        self._was_playing: bool = False
 
     async def start(self) -> None:
         self._running = True
@@ -137,6 +140,11 @@ class OutputManager:
             elif is_connected:
                 self._was_connected = True
 
+            # Detect play-start transition → restim autostart.
+            if is_playing and not self._was_playing:
+                await self._handle_restim_autostart()
+            self._was_playing = is_playing
+
             if is_playing:
                 self._engine.update_values(self._app_state.current_time_ms)
 
@@ -224,3 +232,32 @@ class OutputManager:
             case "force_off": return False
             case "force_on":  return True
             case "hold":      return None
+
+    async def _handle_restim_autostart(self) -> None:
+        cfg = self._app_state.config.player
+        if not cfg.restim_autostart_enabled:
+            return
+        for base_url in cfg.restim_autostart_urls:
+            base_url = base_url.rstrip("/")
+            if not base_url:
+                continue
+            try:
+                status_url = f"{base_url}/status"
+                start_url = f"{base_url}/actions/start"
+
+                def _get_status() -> dict:
+                    with urllib.request.urlopen(status_url, timeout=3.0) as r:  # noqa: S310
+                        return json.loads(r.read())
+
+                def _do_start() -> None:
+                    with urllib.request.urlopen(start_url, timeout=3.0) as r:  # noqa: S310
+                        r.read()
+
+                data = await asyncio.to_thread(_get_status)
+                if not bool(data.get("playing", False)):
+                    await asyncio.to_thread(_do_start)
+                    logger.info("Restim autostart: started %s", base_url)
+                else:
+                    logger.debug("Restim autostart: %s already playing", base_url)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Restim autostart failed for %s: %s", base_url, exc)

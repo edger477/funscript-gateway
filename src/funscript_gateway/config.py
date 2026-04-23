@@ -199,6 +199,8 @@ def _config_from_dict(data: dict) -> GatewayConfig:
         host=player_d.get("host", "127.0.0.1"),
         port=int(player_d.get("port", 23554)),
         poll_interval_ms=int(player_d.get("poll_interval_ms", 150)),
+        restim_autostart_enabled=bool(player_d.get("restim_autostart_enabled", False)),
+        restim_autostart_urls=[str(u) for u in player_d.get("restim_autostart_urls", [])],
     )
     funscript_d = data.get("funscript", {})
     search_paths = [str(p) for p in funscript_d.get("search_paths", [])]
@@ -375,6 +377,8 @@ def _config_to_dict(config: GatewayConfig) -> dict:
             "host": config.player.host,
             "port": config.player.port,
             "poll_interval_ms": config.player.poll_interval_ms,
+            "restim_autostart_enabled": config.player.restim_autostart_enabled,
+            "restim_autostart_urls": list(config.player.restim_autostart_urls),
         },
         "funscript": {
             "search_paths": list(config.funscript_search_paths),

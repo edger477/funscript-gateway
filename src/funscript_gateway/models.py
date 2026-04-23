@@ -146,6 +146,8 @@ class PlayerConfig:
     host: str = "127.0.0.1"
     port: int = 23554
     poll_interval_ms: int = 150
+    restim_autostart_enabled: bool = False
+    restim_autostart_urls: list[str] = field(default_factory=list)
 
 
 @dataclass

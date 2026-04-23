@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -55,6 +56,21 @@ class SettingsTab(QWidget):
         self._poll_spin.setRange(50, 5000)
         player_form.addRow(self._poll_label, self._poll_spin)
 
+        self._autostart_check = QCheckBox("On start playing, start restim instances")
+        player_form.addRow("", self._autostart_check)
+
+        self._autostart_urls_edit = QLineEdit()
+        self._autostart_urls_edit.setPlaceholderText(
+            "http://localhost:12348/v1,http://localhost:12349/v1"
+        )
+        self._autostart_urls_edit.setToolTip(
+            "Comma-separated restim base URLs. When playback starts and a restim instance\n"
+            "is not playing, GET {url}/actions/start is called automatically."
+        )
+        player_form.addRow("Restim URLs:", self._autostart_urls_edit)
+
+        self._autostart_check.toggled.connect(self._autostart_urls_edit.setEnabled)
+
         layout.addWidget(player_group)
 
         # Funscript paths group
@@ -98,6 +114,9 @@ class SettingsTab(QWidget):
         self._host_edit.setText(cfg.host)
         self._port_spin.setValue(cfg.port)
         self._poll_spin.setValue(cfg.poll_interval_ms)
+        self._autostart_check.setChecked(cfg.restim_autostart_enabled)
+        self._autostart_urls_edit.setText(",".join(cfg.restim_autostart_urls))
+        self._autostart_urls_edit.setEnabled(cfg.restim_autostart_enabled)
         self._on_type_changed(cfg.type)
 
         self._paths_list.clear()
@@ -134,6 +153,10 @@ class SettingsTab(QWidget):
         cfg.host = self._host_edit.text().strip()
         cfg.port = self._port_spin.value()
         cfg.poll_interval_ms = self._poll_spin.value()
+        cfg.restim_autostart_enabled = self._autostart_check.isChecked()
+        cfg.restim_autostart_urls = [
+            u.strip() for u in self._autostart_urls_edit.text().split(",") if u.strip()
+        ]
 
         paths = []
         for i in range(self._paths_list.count()):
