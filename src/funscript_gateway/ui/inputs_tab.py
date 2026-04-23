@@ -407,10 +407,10 @@ class InputsTab(QWidget):
 
     def _add_calculated(self) -> None:
         non_calc = self._primary_input_names()
-        if len(non_calc) < 2:
+        if not non_calc:
             QMessageBox.information(
                 self, "Calculated Input",
-                "You need at least 2 non-calculated inputs before creating a calculated one."
+                "You need at least 1 non-calculated input before creating a calculated one."
             )
             return
         from funscript_gateway.ui.input_dialogs import CalculatedDialog
@@ -421,8 +421,8 @@ class InputsTab(QWidget):
         if not inp.name:
             QMessageBox.warning(self, "Invalid", "Input name cannot be empty.")
             return
-        if len(inp.entries) < 2:
-            QMessageBox.warning(self, "Invalid", "A calculated input needs at least 2 entries.")
+        if not inp.entries:
+            QMessageBox.warning(self, "Invalid", "A calculated input needs at least 1 entry.")
             return
         self._save_new_input(inp)
 
@@ -483,8 +483,8 @@ class InputsTab(QWidget):
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 return
             new_inp = dlg.get_config()
-            if len(new_inp.entries) < 2:
-                QMessageBox.warning(self, "Invalid", "A calculated input needs at least 2 entries.")
+            if not new_inp.entries:
+                QMessageBox.warning(self, "Invalid", "A calculated input needs at least 1 entry.")
                 return
             self._replace_input(row, inp, new_inp)
 
