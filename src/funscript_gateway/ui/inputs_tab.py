@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from funscript_gateway.models import (
+    ArithmeticInput,
     As5311Input,
     CalculatedInput,
     FunscriptAxisInput,
@@ -41,6 +42,7 @@ _TYPE_LABELS = {
     "funscript": "Funscript Axis",
     "restim": "Restim",
     "calculated": "Calculated (Logical)",
+    "arithmetic": "Calculated (Arithmetic)",
     "as5311": "AS5311",
 }
 
@@ -52,6 +54,8 @@ def _input_type_key(inp) -> str:
         return "restim"
     if isinstance(inp, CalculatedInput):
         return "calculated"
+    if isinstance(inp, ArithmeticInput):
+        return "arithmetic"
     if isinstance(inp, As5311Input):
         return "as5311"
     return "unknown"
@@ -132,12 +136,25 @@ class InputsTab(QWidget):
                     if entry.input_name == inp_name:
                         count += 1
                         break
+            elif isinstance(inp, ArithmeticInput):
+                for entry in inp.entries:
+                    if entry.input_name == inp_name:
+                        count += 1
+                        break
         return count
 
-    def _non_calculated_names(self) -> list[str]:
+    def _primary_input_names(self) -> list[str]:
+        """Names of non-derived inputs (for Logical dialog)."""
         return [
             inp.name for inp in self._app_state.inputs
-            if not isinstance(inp, CalculatedInput)
+            if not isinstance(inp, (CalculatedInput, ArithmeticInput))
+        ]
+
+    def _non_arithmetic_names(self) -> list[str]:
+        """Names of all inputs except ArithmeticInput (for Arithmetic dialog)."""
+        return [
+            inp.name for inp in self._app_state.inputs
+            if not isinstance(inp, ArithmeticInput)
         ]
 
     # ------------------------------------------------------------------
@@ -236,6 +253,19 @@ class InputsTab(QWidget):
             n = len(inp.entries)
             self._table.setItem(row, _COL_STATUS, QTableWidgetItem(f"{n} entr{'y' if n == 1 else 'ies'}"))
 
+        elif isinstance(inp, ArithmeticInput):
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setValue(int(inp.current_value))
+            bar.setFormat(f"{inp.current_value:.1f}")
+            self._table.setCellWidget(row, _COL_VALUE, bar)
+            n = len(inp.entries)
+            total_w = sum(e.multiplier for e in inp.entries)
+            self._table.setItem(
+                row, _COL_STATUS,
+                QTableWidgetItem(f"{n} entr{'y' if n == 1 else 'ies'}, ÷{total_w}"),
+            )
+
         elif isinstance(inp, As5311Input):
             bar = QProgressBar()
             bar.setRange(0, 100)
@@ -270,6 +300,8 @@ class InputsTab(QWidget):
             val = inp.current_value
             bar.setValue(int(val))
             if isinstance(inp, FunscriptAxisInput):
+                bar.setFormat(f"{val:.1f}")
+            elif isinstance(inp, ArithmeticInput):
                 bar.setFormat(f"{val:.1f}")
             elif isinstance(inp, As5311Input):
                 bar.setFormat(f"{inp.last_position_mm:.3f} mm")
@@ -313,7 +345,8 @@ class InputsTab(QWidget):
         menu.addAction("Funscript Axis", self._add_funscript_axis)
         menu.addAction("Restim", self._add_restim)
         menu.addAction("AS5311 Sensor", self._add_as5311)
-        menu.addAction("Calculated", self._add_calculated)
+        menu.addAction("Calculated - Logical", self._add_calculated)
+        menu.addAction("Calculated - Arithmetic", self._add_arithmetic)
         btn = self.sender()
         pos = btn.mapToGlobal(btn.rect().bottomLeft()) if btn else self.cursor().pos()
         menu.exec(pos)
@@ -351,8 +384,29 @@ class InputsTab(QWidget):
             return
         self._save_new_input(inp)
 
+    def _add_arithmetic(self) -> None:
+        available = self._non_arithmetic_names()
+        if not available:
+            QMessageBox.information(
+                self, "Arithmetic Input",
+                "You need at least 1 non-arithmetic input before creating an arithmetic one."
+            )
+            return
+        from funscript_gateway.ui.input_dialogs import ArithmeticDialog
+        dlg = ArithmeticDialog(available_inputs=available, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        inp = dlg.get_config()
+        if not inp.name:
+            QMessageBox.warning(self, "Invalid", "Input name cannot be empty.")
+            return
+        if not inp.entries:
+            QMessageBox.warning(self, "Invalid", "An arithmetic input needs at least 1 entry.")
+            return
+        self._save_new_input(inp)
+
     def _add_calculated(self) -> None:
-        non_calc = self._non_calculated_names()
+        non_calc = self._primary_input_names()
         if len(non_calc) < 2:
             QMessageBox.information(
                 self, "Calculated Input",
@@ -371,6 +425,18 @@ class InputsTab(QWidget):
             QMessageBox.warning(self, "Invalid", "A calculated input needs at least 2 entries.")
             return
         self._save_new_input(inp)
+
+    def _edit_arithmetic(self, row: int, inp: ArithmeticInput) -> None:
+        available = self._non_arithmetic_names()
+        from funscript_gateway.ui.input_dialogs import ArithmeticDialog
+        dlg = ArithmeticDialog(available_inputs=available, config=inp, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        new_inp = dlg.get_config()
+        if not new_inp.entries:
+            QMessageBox.warning(self, "Invalid", "An arithmetic input needs at least 1 entry.")
+            return
+        self._replace_input(row, inp, new_inp)
 
     def _save_new_input(self, inp) -> None:
         self._app_state.inputs.append(inp)  # config.inputs is the same list
@@ -406,8 +472,12 @@ class InputsTab(QWidget):
             new_inp = dlg.get_config()
             self._replace_input(row, inp, new_inp)
 
+        elif isinstance(inp, ArithmeticInput):
+            self._edit_arithmetic(row, inp)
+            return
+
         elif isinstance(inp, CalculatedInput):
-            non_calc = self._non_calculated_names()
+            non_calc = self._primary_input_names()
             from funscript_gateway.ui.input_dialogs import CalculatedDialog
             dlg = CalculatedDialog(available_inputs=non_calc, config=inp, parent=self)
             if dlg.exec() != QDialog.DialogCode.Accepted:

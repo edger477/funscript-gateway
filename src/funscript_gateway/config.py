@@ -18,6 +18,8 @@ from pathlib import Path
 import tomli_w
 
 from funscript_gateway.models import (
+    ArithmeticEntry,
+    ArithmeticInput,
     As5311Input,
     CalculatedEntry,
     CalculatedInput,
@@ -99,6 +101,21 @@ def _as5311_input_from_dict(d: dict) -> As5311Input:
     )
 
 
+def _arithmetic_input_from_dict(d: dict) -> ArithmeticInput:
+    entries = [
+        ArithmeticEntry(
+            input_name=e.get("input_name", ""),
+            multiplier=int(e.get("multiplier", 1)),
+        )
+        for e in d.get("entries", [])
+    ]
+    return ArithmeticInput(
+        name=d.get("name", ""),
+        enabled=bool(d.get("enabled", True)),
+        entries=entries,
+    )
+
+
 def _input_from_dict(d: dict):
     input_type = d.get("type", "funscript_axis")
     if input_type == "restim":
@@ -107,6 +124,8 @@ def _input_from_dict(d: dict):
         return _calculated_input_from_dict(d)
     if input_type == "as5311":
         return _as5311_input_from_dict(d)
+    if input_type == "arithmetic":
+        return _arithmetic_input_from_dict(d)
     return _funscript_axis_input_from_dict(d)
 
 
@@ -276,6 +295,16 @@ def _input_to_dict(inp) -> dict:
             "enabled": inp.enabled,
             "threshold_mm": inp.threshold_mm,
             "range_mm": inp.range_mm,
+        }
+    if isinstance(inp, ArithmeticInput):
+        return {
+            "type": "arithmetic",
+            "name": inp.name,
+            "enabled": inp.enabled,
+            "entries": [
+                {"input_name": e.input_name, "multiplier": e.multiplier}
+                for e in inp.entries
+            ],
         }
     return {}
 

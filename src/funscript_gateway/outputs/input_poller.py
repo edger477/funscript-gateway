@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 import websockets
 
 from funscript_gateway.models import (
+    ArithmeticInput,
     As5311Input,
     CalculatedInput,
     FunscriptAxisInput,
@@ -92,6 +93,20 @@ def _eval_calculated(inp: CalculatedInput, value_map: dict[str, float]) -> float
             case "xor":
                 result = result ^ val
     return 100.0 if result else 0.0
+
+
+def _eval_arithmetic(inp: ArithmeticInput, value_map: dict[str, float]) -> float:
+    """Weighted average of input values, clamped to 0–100.
+
+    output = Σ(value_i × mult_i) / Σ(mult_i)
+    """
+    if not inp.entries:
+        return 0.0
+    total_weight = sum(e.multiplier for e in inp.entries)
+    if total_weight == 0:
+        return 0.0
+    weighted_sum = sum(value_map.get(e.input_name, 0.0) * e.multiplier for e in inp.entries)
+    return max(0.0, min(100.0, weighted_sum / total_weight))
 
 
 class InputPoller:
@@ -206,15 +221,30 @@ class InputPoller:
                 await asyncio.sleep(5.0)
 
     def _evaluate_calculated(self) -> None:
-        # Build value lookup from all non-calculated inputs
-        value_map: dict[str, float] = {
+        # Primary inputs (funscript, restim, as5311) — available to all derived types
+        primary_map: dict[str, float] = {
             inp.name: inp.current_value
             for inp in self._app_state.inputs
-            if not isinstance(inp, CalculatedInput)
+            if not isinstance(inp, (CalculatedInput, ArithmeticInput))
         }
+
+        # Logical calculated inputs can reference primary inputs only
         for inp in self._app_state.inputs:
             if isinstance(inp, CalculatedInput) and inp.enabled:
-                inp.current_value = _eval_calculated(inp, value_map)
+                inp.current_value = _eval_calculated(inp, primary_map)
+
+        # Arithmetic inputs can reference primary + logical inputs
+        derived_map = {
+            **primary_map,
+            **{
+                inp.name: inp.current_value
+                for inp in self._app_state.inputs
+                if isinstance(inp, CalculatedInput)
+            },
+        }
+        for inp in self._app_state.inputs:
+            if isinstance(inp, ArithmeticInput) and inp.enabled:
+                inp.current_value = _eval_arithmetic(inp, derived_map)
 
     def evaluate_calculated_now(self) -> None:
         """Evaluate calculated inputs immediately (called by OutputManager after axis update)."""

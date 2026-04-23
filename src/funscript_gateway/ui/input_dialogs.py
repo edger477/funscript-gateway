@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
 )
 
 from funscript_gateway.models import (
+    ArithmeticEntry,
+    ArithmeticInput,
     As5311Input,
     CalculatedEntry,
     CalculatedInput,
@@ -381,6 +383,140 @@ class CalculatedDialog(QDialog):
             for _, op_combo, inp_combo, dir_combo, thresh_spin in self._rows
         ]
         return CalculatedInput(
+            name=self._name_edit.text().strip(),
+            enabled=self._enabled_check.isChecked(),
+            entries=entries,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Arithmetic dialog
+# ---------------------------------------------------------------------------
+
+class ArithmeticDialog(QDialog):
+    """Dialog for creating/editing an ArithmeticInput (weighted average)."""
+
+    def __init__(
+        self,
+        available_inputs: list[str],
+        config: ArithmeticInput | None = None,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Calculated Input (Arithmetic)")
+        self.setMinimumWidth(480)
+
+        cfg = config or ArithmeticInput(name="")
+        self._available = list(available_inputs)
+
+        layout = QVBoxLayout(self)
+
+        top_form = QFormLayout()
+        self._name_edit = QLineEdit(cfg.name)
+        top_form.addRow("Name:", self._name_edit)
+        self._enabled_check = QCheckBox()
+        self._enabled_check.setChecked(cfg.enabled)
+        top_form.addRow("Enabled:", self._enabled_check)
+        layout.addLayout(top_form)
+
+        self._formula_label = QLabel()
+        self._formula_label.setWordWrap(True)
+        self._formula_label.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self._formula_label)
+
+        self._entries_widget = QWidget()
+        self._entries_layout = QVBoxLayout(self._entries_widget)
+        self._entries_layout.setContentsMargins(0, 0, 0, 0)
+        self._entries_layout.setSpacing(4)
+        layout.addWidget(self._entries_widget)
+
+        # _rows: list of (row_widget, inp_combo, mult_combo)
+        self._rows: list[tuple] = []
+
+        for entry in cfg.entries:
+            self._add_row(entry.input_name, entry.multiplier)
+        if not self._rows:
+            self._add_row("", 1)
+
+        add_btn = QPushButton("Add Entry")
+        add_btn.clicked.connect(lambda: self._add_row("", 1))
+        layout.addWidget(add_btn)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self._update_formula()
+
+    def _add_row(self, input_name: str, multiplier: int) -> None:
+        row_widget = QWidget()
+        h = QHBoxLayout(row_widget)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(4)
+
+        inp_combo = QComboBox()
+        inp_combo.addItems(self._available)
+        if input_name in self._available:
+            inp_combo.setCurrentText(input_name)
+        inp_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        inp_combo.currentTextChanged.connect(self._update_formula)
+        h.addWidget(inp_combo)
+
+        times_label = QLabel("\u00d7")   # ×
+        h.addWidget(times_label)
+
+        mult_combo = QComboBox()
+        mult_combo.addItems(["1", "2", "3", "4"])
+        mult_combo.setCurrentText(str(multiplier))
+        mult_combo.setFixedWidth(60)
+        mult_combo.currentTextChanged.connect(self._update_formula)
+        h.addWidget(mult_combo)
+
+        remove_btn = QToolButton()
+        remove_btn.setText("\u2715")
+        remove_btn.clicked.connect(lambda: self._remove_row(row_widget))
+        h.addWidget(remove_btn)
+
+        self._entries_layout.addWidget(row_widget)
+        self._rows.append((row_widget, inp_combo, mult_combo))
+        self._update_formula()
+
+    def _remove_row(self, row_widget: QWidget) -> None:
+        for i, (rw, *_) in enumerate(self._rows):
+            if rw is row_widget:
+                self._rows.pop(i)
+                rw.deleteLater()
+                break
+        self._update_formula()
+
+    def _update_formula(self) -> None:
+        if not self._rows:
+            self._formula_label.setText("Formula: (empty)")
+            return
+        parts = []
+        total_weight = 0
+        for _, inp, mult in self._rows:
+            m = int(mult.currentText())
+            total_weight += m
+            name = inp.currentText() or "?"
+            parts.append(f"{name} \u00d7 {m}" if m > 1 else name)
+        inner = " + ".join(parts)
+        if len(self._rows) > 1:
+            inner = f"({inner})"
+        self._formula_label.setText(f"Formula: {inner} \u00f7 {total_weight}")
+
+    def get_config(self) -> ArithmeticInput:
+        entries = [
+            ArithmeticEntry(
+                input_name=inp_combo.currentText(),
+                multiplier=int(mult_combo.currentText()),
+            )
+            for _, inp_combo, mult_combo in self._rows
+        ]
+        return ArithmeticInput(
             name=self._name_edit.text().strip(),
             enabled=self._enabled_check.isChecked(),
             entries=entries,

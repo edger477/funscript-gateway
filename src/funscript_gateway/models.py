@@ -102,7 +102,22 @@ class As5311Input:
     is_error: bool = False
 
 
-AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput, As5311Input]
+@dataclass
+class ArithmeticEntry:
+    input_name: str
+    multiplier: int = 1   # 1–4; output = Σ(value_i × mult_i) / Σ(mult_i)
+
+
+@dataclass
+class ArithmeticInput:
+    name: str
+    enabled: bool = True
+    entries: list[ArithmeticEntry] = field(default_factory=list)
+    # Runtime:
+    current_value: float = 0.0
+
+
+AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput, As5311Input, ArithmeticInput]
 
 
 PLAYER_DEFAULT_PORTS: dict[str, int] = {
