@@ -30,6 +30,7 @@ from funscript_gateway.models import (
     PlayerConfig,
     RestimCondition,
     RestimInput,
+    TasmotaInput,
     TasmotaOutputConfig,
     ThresholdSwitchConfig,
 )
@@ -101,6 +102,17 @@ def _as5311_input_from_dict(d: dict) -> As5311Input:
     )
 
 
+def _tasmota_input_from_dict(d: dict) -> TasmotaInput:
+    return TasmotaInput(
+        name=d.get("name", ""),
+        host=d.get("host", ""),
+        device_index=int(d.get("device_index", 1)),
+        poll_interval_s=float(d.get("poll_interval_s", 2.0)),
+        timeout_s=float(d.get("timeout_s", 3.0)),
+        enabled=bool(d.get("enabled", True)),
+    )
+
+
 def _arithmetic_input_from_dict(d: dict) -> ArithmeticInput:
     entries = [
         ArithmeticEntry(
@@ -126,6 +138,8 @@ def _input_from_dict(d: dict):
         return _as5311_input_from_dict(d)
     if input_type == "arithmetic":
         return _arithmetic_input_from_dict(d)
+    if input_type == "tasmota":
+        return _tasmota_input_from_dict(d)
     return _funscript_axis_input_from_dict(d)
 
 
@@ -305,6 +319,16 @@ def _input_to_dict(inp) -> dict:
                 {"input_name": e.input_name, "multiplier": e.multiplier}
                 for e in inp.entries
             ],
+        }
+    if isinstance(inp, TasmotaInput):
+        return {
+            "type": "tasmota",
+            "name": inp.name,
+            "host": inp.host,
+            "device_index": inp.device_index,
+            "poll_interval_s": inp.poll_interval_s,
+            "timeout_s": inp.timeout_s,
+            "enabled": inp.enabled,
         }
     return {}
 

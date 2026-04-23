@@ -18,6 +18,7 @@ from funscript_gateway.models import (
     FunscriptAxisInput,
     RestimCondition,
     RestimInput,
+    TasmotaInput,
 )
 
 if TYPE_CHECKING:
@@ -150,6 +151,11 @@ class InputPoller:
                     if now - last >= inp.poll_interval_s:
                         await self._poll_restim(inp)
                         self._last_poll[inp.name] = now
+                elif isinstance(inp, TasmotaInput) and inp.enabled:
+                    last = self._last_poll.get(inp.name, -1e9)
+                    if now - last >= inp.poll_interval_s:
+                        await self._poll_tasmota(inp)
+                        self._last_poll[inp.name] = now
 
             # One WS task per unique URL (shared across inputs with the same endpoint)
             active_urls = {
@@ -169,6 +175,19 @@ class InputPoller:
 
             self._evaluate_calculated()
             await asyncio.sleep(_LOOP_INTERVAL_S)
+
+    async def _poll_tasmota(self, inp: TasmotaInput) -> None:
+        url = f"http://{inp.host}/cm?cmnd=Power{inp.device_index}"
+        try:
+            data = await asyncio.to_thread(_fetch_json, url)
+            key = f"POWER{inp.device_index}"
+            state_str = data.get(key) or data.get("POWER", "OFF")
+            inp.current_value = 100.0 if str(state_str).upper() == "ON" else 0.0
+            inp.is_error = False
+            logger.debug("Tasmota '%s': state=%s value=%.0f", inp.name, state_str, inp.current_value)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Tasmota poll '%s' failed: %s", inp.name, exc)
+            inp.is_error = True
 
     async def _poll_restim(self, inp: RestimInput) -> None:
         try:
@@ -221,7 +240,7 @@ class InputPoller:
                 await asyncio.sleep(5.0)
 
     def _evaluate_calculated(self) -> None:
-        # Primary inputs (funscript, restim, as5311) — available to all derived types
+        # Primary inputs (funscript, restim, as5311, tasmota) — available to all derived types
         primary_map: dict[str, float] = {
             inp.name: inp.current_value
             for inp in self._app_state.inputs

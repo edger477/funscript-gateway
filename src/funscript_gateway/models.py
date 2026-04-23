@@ -117,7 +117,21 @@ class ArithmeticInput:
     current_value: float = 0.0
 
 
-AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput, As5311Input, ArithmeticInput]
+@dataclass
+class TasmotaInput:
+    """Polls a Tasmota device's power state via HTTP. Maps OFF→0, ON→100."""
+    name: str
+    host: str = ""
+    device_index: int = 1
+    poll_interval_s: float = 2.0
+    timeout_s: float = 3.0
+    enabled: bool = True
+    # Runtime fields (not persisted):
+    current_value: float = 0.0
+    is_error: bool = False
+
+
+AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput, As5311Input, ArithmeticInput, TasmotaInput]
 
 
 PLAYER_DEFAULT_PORTS: dict[str, int] = {

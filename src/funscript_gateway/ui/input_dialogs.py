@@ -30,6 +30,7 @@ from funscript_gateway.models import (
     FunscriptAxisInput,
     RestimCondition,
     RestimInput,
+    TasmotaInput,
 )
 
 
@@ -520,6 +521,72 @@ class ArithmeticDialog(QDialog):
             name=self._name_edit.text().strip(),
             enabled=self._enabled_check.isChecked(),
             entries=entries,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tasmota input dialog
+# ---------------------------------------------------------------------------
+
+class TasmotaInputDialog(QDialog):
+    """Dialog for creating/editing a TasmotaInput (polls device power state)."""
+
+    def __init__(self, config: TasmotaInput | None = None, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Tasmota Input")
+        self.setMinimumWidth(360)
+
+        cfg = config or TasmotaInput(name="")
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self._name_edit = QLineEdit(cfg.name)
+        form.addRow("Name:", self._name_edit)
+
+        self._host_edit = QLineEdit(cfg.host)
+        self._host_edit.setPlaceholderText("e.g. 192.168.1.42 or tasmota-abc123")
+        form.addRow("Host:", self._host_edit)
+
+        self._index_spin = QDoubleSpinBox()
+        self._index_spin.setRange(1, 8)
+        self._index_spin.setDecimals(0)
+        self._index_spin.setValue(cfg.device_index)
+        form.addRow("Device index:", self._index_spin)
+
+        self._poll_spin = QDoubleSpinBox()
+        self._poll_spin.setRange(0.5, 60.0)
+        self._poll_spin.setDecimals(1)
+        self._poll_spin.setSuffix(" s")
+        self._poll_spin.setValue(cfg.poll_interval_s)
+        form.addRow("Poll interval:", self._poll_spin)
+
+        self._timeout_spin = QDoubleSpinBox()
+        self._timeout_spin.setRange(0.5, 30.0)
+        self._timeout_spin.setDecimals(1)
+        self._timeout_spin.setSuffix(" s")
+        self._timeout_spin.setValue(cfg.timeout_s)
+        form.addRow("Timeout:", self._timeout_spin)
+
+        self._enabled_check = QCheckBox()
+        self._enabled_check.setChecked(cfg.enabled)
+        form.addRow("Enabled:", self._enabled_check)
+
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_config(self) -> TasmotaInput:
+        return TasmotaInput(
+            name=self._name_edit.text().strip(),
+            host=self._host_edit.text().strip(),
+            device_index=int(self._index_spin.value()),
+            poll_interval_s=self._poll_spin.value(),
+            timeout_s=self._timeout_spin.value(),
+            enabled=self._enabled_check.isChecked(),
         )
 
 

@@ -26,6 +26,7 @@ from funscript_gateway.models import (
     CalculatedInput,
     FunscriptAxisInput,
     RestimInput,
+    TasmotaInput,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ _TYPE_LABELS = {
     "calculated": "Calculated (Logical)",
     "arithmetic": "Calculated (Arithmetic)",
     "as5311": "AS5311",
+    "tasmota": "Tasmota",
 }
 
 
@@ -58,6 +60,8 @@ def _input_type_key(inp) -> str:
         return "arithmetic"
     if isinstance(inp, As5311Input):
         return "as5311"
+    if isinstance(inp, TasmotaInput):
+        return "tasmota"
     return "unknown"
 
 
@@ -280,6 +284,19 @@ class InputsTab(QWidget):
                 status = QTableWidgetItem(f"{inp.threshold_mm:.3g}–{hi:.4g} mm")
             self._table.setItem(row, _COL_STATUS, status)
 
+        elif isinstance(inp, TasmotaInput):
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setValue(int(inp.current_value))
+            bar.setFormat("ON" if inp.current_value >= 50.0 else "OFF")
+            self._table.setCellWidget(row, _COL_VALUE, bar)
+            if inp.is_error:
+                status = QTableWidgetItem("Error")
+                status.setForeground(Qt.GlobalColor.darkRed)
+            else:
+                status = QTableWidgetItem(inp.host or "—")
+            self._table.setItem(row, _COL_STATUS, status)
+
         # Used In
         used = self._used_in_count(inp.name)
         used_item = QTableWidgetItem(str(used) if used > 0 else "—")
@@ -331,6 +348,16 @@ class InputsTab(QWidget):
                         item.setText(f"{inp.threshold_mm:.3g}–{hi:.4g} mm")
                         item.setForeground(self._table.palette().text().color())
 
+            elif isinstance(inp, TasmotaInput):
+                item = self._table.item(row, _COL_STATUS)
+                if item:
+                    if inp.is_error:
+                        item.setText("Error")
+                        item.setForeground(Qt.GlobalColor.darkRed)
+                    else:
+                        item.setText(inp.host or "—")
+                        item.setForeground(self._table.palette().text().color())
+
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
@@ -345,6 +372,7 @@ class InputsTab(QWidget):
         menu.addAction("Funscript Axis", self._add_funscript_axis)
         menu.addAction("Restim", self._add_restim)
         menu.addAction("AS5311 Sensor", self._add_as5311)
+        menu.addAction("Tasmota", self._add_tasmota)
         menu.addAction("Calculated - Logical", self._add_calculated)
         menu.addAction("Calculated - Arithmetic", self._add_arithmetic)
         btn = self.sender()
@@ -376,6 +404,17 @@ class InputsTab(QWidget):
     def _add_as5311(self) -> None:
         from funscript_gateway.ui.input_dialogs import As5311Dialog
         dlg = As5311Dialog(parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        inp = dlg.get_config()
+        if not inp.name:
+            QMessageBox.warning(self, "Invalid", "Input name cannot be empty.")
+            return
+        self._save_new_input(inp)
+
+    def _add_tasmota(self) -> None:
+        from funscript_gateway.ui.input_dialogs import TasmotaInputDialog
+        dlg = TasmotaInputDialog(parent=self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         inp = dlg.get_config()
@@ -491,6 +530,14 @@ class InputsTab(QWidget):
         elif isinstance(inp, As5311Input):
             from funscript_gateway.ui.input_dialogs import As5311Dialog
             dlg = As5311Dialog(config=inp, parent=self)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            new_inp = dlg.get_config()
+            self._replace_input(row, inp, new_inp)
+
+        elif isinstance(inp, TasmotaInput):
+            from funscript_gateway.ui.input_dialogs import TasmotaInputDialog
+            dlg = TasmotaInputDialog(config=inp, parent=self)
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 return
             new_inp = dlg.get_config()

@@ -30,9 +30,10 @@ Video player ──► funscript-gateway ──► evaluates input value at curr
 2. For **Funscript Axis** inputs: the gateway looks up the funscript file (e.g. `myvideo.volume.funscript`) and interpolates its value (0–100) at the current timestamp.
 3. For **Restim** inputs: the gateway polls the configured HTTP endpoint at the configured interval and evaluates conditions (playing state, volume thresholds).
 4. For **AS5311** inputs: the gateway receives position data from a magnetic linear encoder via WebSocket and maps it to 0–100 using configurable threshold and range.
-5. For **Calculated (Logical)** inputs: the gateway combines one or more inputs using AND / OR / XOR logic, converting each input to a boolean with its own configurable threshold and direction.
-6. For **Calculated (Arithmetic)** inputs: the gateway computes a weighted average of selected inputs — each entry has a configurable multiplier (1–4) — and outputs the result as a continuous 0–100 value.
-7. Every 50 ms, each output reads its assigned input value and applies a threshold + hysteresis to produce ON or OFF, which is sent to the device.
+5. For **Tasmota** inputs: the gateway polls a Tasmota device's power state via HTTP and maps OFF→0, ON→100.
+6. For **Calculated (Logical)** inputs: the gateway combines one or more inputs using AND / OR / XOR logic, converting each input to a boolean with its own configurable threshold and direction.
+7. For **Calculated (Arithmetic)** inputs: the gateway computes a weighted average of selected inputs — each entry has a configurable multiplier (1–4) — and outputs the result as a continuous 0–100 value.
+8. Every 50 ms, each output reads its assigned input value and applies a threshold + hysteresis to produce ON or OFF, which is sent to the device.
 
 ### Funscript file naming
 
@@ -92,7 +93,7 @@ In funscript-gateway → **Settings** tab:
 
 ## Inputs
 
-In the **Inputs** tab, configure the data sources that outputs read from. Five input types are available:
+In the **Inputs** tab, configure the data sources that outputs read from. Six input types are available:
 
 ### Funscript Axis
 
@@ -130,6 +131,18 @@ Receives position data from the restim AS5311 magnetic linear encoder via a pers
 | **Range (mm)** | Span from threshold to full scale. `threshold + range` maps to output value 100. The natural AS5311 range is 2 mm per pole pair. |
 
 Multiple inputs pointing to the same URL share one WebSocket connection.
+
+### Tasmota
+
+Polls a Tasmota device's power state via its HTTP API. Maps OFF→0 (0%), ON→100 (100%). Evaluated continuously regardless of player state.
+
+| Setting | Description |
+|---------|-------------|
+| **Name** | Input name |
+| **Host** | Hostname or IP of the Tasmota device |
+| **Device index** | Power channel index, usually `1` |
+| **Poll interval** | How often to query, in seconds |
+| **Timeout** | HTTP request timeout, in seconds |
 
 ### Calculated (Logical)
 
