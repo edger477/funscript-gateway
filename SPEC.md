@@ -1,7 +1,7 @@
 # funscript-gateway — Technical Specification
 
-**Version:** 0.1.4  
-**Date:** 2026-04-23  
+**Version:** 0.1.5  
+**Date:** 2026-04-24  
 **Status:** Draft
 
 ---
@@ -1249,6 +1249,8 @@ Player Settings
 Player Type:     [HereSphere ▼]
 Host:            [127.0.0.1      ]
 Port:            [23554  ]
+                 [✓] On start playing, start restim instances
+Restim URLs:     [http://localhost:12348/v1,http://localhost:12349/v1]
 
 Funscript Paths
 ───────────────
@@ -1259,7 +1261,16 @@ Additional search paths:
                             [Apply]  [Cancel]
 ```
 
-Apply writes the configuration to disk and triggers a reconnection if player settings changed.
+**Restim autostart controls:**
+
+| Control | Description |
+|---------|-------------|
+| Checkbox "On start playing, start restim instances" | Enables the autostart feature. When unchecked, the URL field is disabled and no autostart requests are made. |
+| Restim URLs field | Comma-separated list of restim base URLs (e.g. `http://localhost:12348/v1`). Each URL is checked independently on every play-start transition. |
+
+**Autostart behavior:** When the checkbox is enabled and the player transitions from any non-playing state to `CONNECTED_AND_PLAYING`, the `OutputManager` queries `GET {url}/status` for each configured URL. If the response contains `"playing": false`, it immediately sends `GET {url}/actions/start`. Instances already playing are left undisturbed. The check and start requests run via `asyncio.to_thread` (blocking `urllib.request`) and failures are logged as warnings without blocking playback.
+
+Apply writes the configuration to disk and triggers a reconnection if player connection settings changed.
 
 ---
 
@@ -1403,6 +1414,8 @@ class PlayerConfig:
     host: str = "127.0.0.1"
     port: int = 23554
     poll_interval_ms: int = 150        # MPC-HC only; ignored by HereSphere (event-driven)
+    restim_autostart_enabled: bool = False
+    restim_autostart_urls: list[str] = field(default_factory=list)  # base URLs, e.g. ["http://localhost:12348/v1"]
 ```
 
 ### Output Config Hierarchy
@@ -1638,7 +1651,8 @@ Main Thread
           │     ├── CalculatedInput (Logical): evaluated synchronously each tick from primary inputs' current_value
           │     └── ArithmeticInput: evaluated synchronously after logical inputs (two-pass order)
           ├── OutputManager evaluation loop (50 ms timer)
-          │     └── TasmotaDriver: asyncio.to_thread → urllib.request (thread pool)
+          │     ├── TasmotaDriver: asyncio.to_thread → urllib.request (thread pool)
+          │     └── Restim autostart: asyncio.to_thread → urllib.request on play-start transition
           └── MqttDriver connect/disconnect: asyncio.to_thread (thread pool)
 
 Background Threads (managed by paho-mqtt, one per MqttDriver)

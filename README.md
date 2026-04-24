@@ -91,6 +91,20 @@ In funscript-gateway → **Settings** tab:
 
 ---
 
+## Automation
+
+### Restim autostart
+
+When you start playing a video, funscript-gateway can automatically start any restim instances that are currently stopped.
+
+In funscript-gateway → **Settings** tab → **Player Settings**:
+- Tick **On start playing, start restim instances**
+- Enter the comma-separated restim base URLs in the **Restim URLs** field (e.g. `http://localhost:12348/v1,http://localhost:12349/v1`)
+
+On every play-start transition (player goes from not-playing to playing), the gateway checks `GET {url}/status` for each configured URL. If `playing` is `false`, it calls `GET {url}/actions/start`. Instances already playing are left undisturbed. Failures are logged as warnings and do not affect playback.
+
+---
+
 ## Inputs
 
 In the **Inputs** tab, configure the data sources that outputs read from. Six input types are available:
