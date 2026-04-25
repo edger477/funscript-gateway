@@ -25,6 +25,7 @@ from funscript_gateway.models import (
     CalculatedInput,
     FunscriptAxisInput,
     GatewayConfig,
+    HeartRateInput,
     MqttOutputConfig,
     OutputConfig,
     PlayerConfig,
@@ -113,6 +114,17 @@ def _tasmota_input_from_dict(d: dict) -> TasmotaInput:
     )
 
 
+def _heart_rate_input_from_dict(d: dict) -> HeartRateInput:
+    return HeartRateInput(
+        name=d.get("name", ""),
+        device_address=d.get("device_address", ""),
+        device_label=d.get("device_label", ""),
+        enabled=bool(d.get("enabled", True)),
+        scale_min_bpm=int(d.get("scale_min_bpm", 40)),
+        scale_max_bpm=int(d.get("scale_max_bpm", 180)),
+    )
+
+
 def _arithmetic_input_from_dict(d: dict) -> ArithmeticInput:
     entries = [
         ArithmeticEntry(
@@ -140,6 +152,8 @@ def _input_from_dict(d: dict):
         return _arithmetic_input_from_dict(d)
     if input_type == "tasmota":
         return _tasmota_input_from_dict(d)
+    if input_type == "heart_rate":
+        return _heart_rate_input_from_dict(d)
     return _funscript_axis_input_from_dict(d)
 
 
@@ -331,6 +345,16 @@ def _input_to_dict(inp) -> dict:
             "poll_interval_s": inp.poll_interval_s,
             "timeout_s": inp.timeout_s,
             "enabled": inp.enabled,
+        }
+    if isinstance(inp, HeartRateInput):
+        return {
+            "type": "heart_rate",
+            "name": inp.name,
+            "device_address": inp.device_address,
+            "device_label": inp.device_label,
+            "enabled": inp.enabled,
+            "scale_min_bpm": inp.scale_min_bpm,
+            "scale_max_bpm": inp.scale_max_bpm,
         }
     return {}
 

@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import asyncio
+
 from funscript_gateway.models import (
     ArithmeticEntry,
     ArithmeticInput,
@@ -28,6 +30,7 @@ from funscript_gateway.models import (
     CalculatedEntry,
     CalculatedInput,
     FunscriptAxisInput,
+    HeartRateInput,
     RestimCondition,
     RestimInput,
     TasmotaInput,
@@ -663,4 +666,145 @@ class As5311Dialog(QDialog):
             enabled=self._enabled_check.isChecked(),
             threshold_mm=self._threshold_spin.value(),
             range_mm=self._range_spin.value(),
+        )
+
+
+# ---------------------------------------------------------------------------
+# HeartRate dialog
+# ---------------------------------------------------------------------------
+
+class HeartRateInputDialog(QDialog):
+    """Dialog for creating/editing a HeartRateInput (BLE Heart Rate Profile)."""
+
+    def __init__(self, config: HeartRateInput | None = None, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Heart Rate Input (BLE)")
+        self.setMinimumWidth(420)
+
+        cfg = config or HeartRateInput(name="")
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self._name_edit = QLineEdit(cfg.name)
+        form.addRow("Name:", self._name_edit)
+
+        # Device address row: editable field + scan button
+        addr_row = QHBoxLayout()
+        self._addr_edit = QLineEdit(cfg.device_address)
+        self._addr_edit.setPlaceholderText("BLE address — use Scan to discover")
+        addr_row.addWidget(self._addr_edit)
+        self._scan_btn = QPushButton("Scan…")
+        self._scan_btn.setFixedWidth(70)
+        self._scan_btn.clicked.connect(self._on_scan)
+        addr_row.addWidget(self._scan_btn)
+        form.addRow("Device address:", addr_row)
+
+        # Scan results combo (hidden until first scan)
+        self._results_combo = QComboBox()
+        self._results_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._results_combo.currentIndexChanged.connect(self._on_result_selected)
+        self._results_combo.hide()
+        form.addRow("Found devices:", self._results_combo)
+        self._results_label = QLabel()
+        self._results_label.hide()
+        form.addRow("", self._results_label)
+
+        self._label_edit = QLineEdit(cfg.device_label)
+        self._label_edit.setPlaceholderText("Auto-filled by scan, or leave blank")
+        form.addRow("Device name:", self._label_edit)
+
+        hint = QLabel(
+            "<small>Device must be <b>paired</b> in Windows Bluetooth settings first.<br>"
+            "Supports BLE chest straps and watches in HR Broadcast mode.</small>"
+        )
+        hint.setTextFormat(Qt.TextFormat.RichText)
+        form.addRow("", hint)
+
+        self._min_spin = QDoubleSpinBox()
+        self._min_spin.setRange(20, 250)
+        self._min_spin.setDecimals(0)
+        self._min_spin.setSuffix(" BPM")
+        self._min_spin.setValue(cfg.scale_min_bpm)
+        self._min_spin.setToolTip("BPM value that maps to output 0")
+        form.addRow("Min BPM (→ 0):", self._min_spin)
+
+        self._max_spin = QDoubleSpinBox()
+        self._max_spin.setRange(20, 250)
+        self._max_spin.setDecimals(0)
+        self._max_spin.setSuffix(" BPM")
+        self._max_spin.setValue(cfg.scale_max_bpm)
+        self._max_spin.setToolTip("BPM value that maps to output 100")
+        form.addRow("Max BPM (→ 100):", self._max_spin)
+
+        self._enabled_check = QCheckBox()
+        self._enabled_check.setChecked(cfg.enabled)
+        form.addRow("Enabled:", self._enabled_check)
+
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _on_scan(self) -> None:
+        self._scan_btn.setEnabled(False)
+        self._scan_btn.setText("…")
+        self._results_combo.clear()
+        self._results_combo.show()
+        self._results_label.hide()
+        asyncio.ensure_future(self._do_scan())
+
+    async def _do_scan(self) -> None:
+        _HR_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb"
+        try:
+            from bleak import BleakScanner
+            devices = await BleakScanner.discover(timeout=5.0, service_uuids=[_HR_SERVICE_UUID])
+            if not self.isVisible():
+                return
+            self._results_combo.clear()
+            if devices:
+                self._results_combo.addItem("— select a device —", ("", ""))
+                for d in sorted(devices, key=lambda x: x.name or ""):
+                    label = f"{d.name or 'Unknown'} [{d.address}]"
+                    self._results_combo.addItem(label, (d.address, d.name or ""))
+            else:
+                self._results_combo.addItem("No HR devices found (is device paired?)", ("", ""))
+        except ImportError:
+            if not self.isVisible():
+                return
+            self._results_combo.clear()
+            self._results_combo.addItem("bleak not installed — run: pip install bleak", ("", ""))
+        except Exception as exc:  # noqa: BLE001
+            if not self.isVisible():
+                return
+            self._results_combo.clear()
+            self._results_combo.addItem(f"Scan error: {exc}", ("", ""))
+        finally:
+            if self.isVisible():
+                self._scan_btn.setEnabled(True)
+                self._scan_btn.setText("Scan…")
+
+    def _on_result_selected(self, index: int) -> None:
+        if index < 0:
+            return
+        data = self._results_combo.itemData(index)
+        if not data:
+            return
+        address, name = data
+        if address:
+            self._addr_edit.setText(address)
+            if name and not self._label_edit.text():
+                self._label_edit.setText(name)
+
+    def get_config(self) -> HeartRateInput:
+        return HeartRateInput(
+            name=self._name_edit.text().strip(),
+            device_address=self._addr_edit.text().strip(),
+            device_label=self._label_edit.text().strip(),
+            enabled=self._enabled_check.isChecked(),
+            scale_min_bpm=int(self._min_spin.value()),
+            scale_max_bpm=int(self._max_spin.value()),
         )

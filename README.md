@@ -33,7 +33,8 @@ Video player ──► funscript-gateway ──► evaluates input value at curr
 5. For **Tasmota** inputs: the gateway polls a Tasmota device's power state via HTTP and maps OFF→0, ON→100.
 6. For **Calculated (Logical)** inputs: the gateway combines one or more inputs using AND / OR / XOR logic, converting each input to a boolean with its own configurable threshold and direction.
 7. For **Calculated (Arithmetic)** inputs: the gateway computes a weighted average of selected inputs — each entry has a configurable multiplier (1–4) — and outputs the result as a continuous 0–100 value.
-8. Every 50 ms, each output reads its assigned input value and applies a threshold + hysteresis to produce ON or OFF, which is sent to the device.
+8. For **Heart Rate (BLE)** inputs: the gateway connects to a Bluetooth Low Energy heart rate sensor, reads beats-per-minute via the standard GATT Heart Rate Profile, and maps it linearly to 0–100 using configurable min/max BPM bounds.
+9. Every 50 ms, each output reads its assigned input value and applies a threshold + hysteresis to produce ON or OFF, which is sent to the device.
 
 ### Funscript file naming
 
@@ -107,7 +108,7 @@ On every play-start transition (player goes from not-playing to playing), the ga
 
 ## Inputs
 
-In the **Inputs** tab, configure the data sources that outputs read from. Six input types are available:
+In the **Inputs** tab, configure the data sources that outputs read from. Seven input types are available:
 
 ### Funscript Axis
 
@@ -168,6 +169,27 @@ Combines one or more non-calculated inputs using AND / OR / XOR, evaluated left-
 | **Entries** | At least 1 non-calculated input. First entry has no operator; subsequent entries specify AND / OR / XOR. Each entry also has a direction (≥ / <) and threshold (0–100) for the boolean conversion. |
 
 The formula is shown live in the dialog, e.g. `(vibration ≥ 60.0 or restim < 30.0)`.
+
+### Heart Rate (BLE)
+
+Connects to a Bluetooth Low Energy heart rate sensor using the standard GATT Heart Rate Profile (0x180D / 0x2A37). Receives BPM notifications pushed by the device (~1 Hz) and maps them linearly to 0–100. Evaluated continuously regardless of player state.
+
+| Setting | Description |
+|---------|-------------|
+| **Name** | Input name |
+| **Device address** | BLE address of the paired sensor. Use the **Scan…** button to discover nearby HR devices automatically. |
+| **Device name** | Human-readable label (auto-filled by scan, display only) |
+| **Min BPM (→ 0)** | BPM value that maps to output 0. Default: `40` |
+| **Max BPM (→ 100)** | BPM value that maps to output 100. Default: `180` |
+
+**Device compatibility:**
+- BLE chest straps (Polar H10, Wahoo TICKR, Garmin HRM, Coospo, etc.) — works universally
+- Polar / Garmin watches — works when **Broadcast Heart Rate** mode is active in the watch activity
+- Apple Watch, Samsung Galaxy Watch, Fitbit — not supported (no standard GATT HR exposure)
+
+**Prerequisites:** The device must be **paired in Windows Bluetooth settings** before the app can connect. If the connection drops, the gateway retries automatically every 5 seconds.
+
+The value bar in the Inputs tab shows the current BPM reading; the status column shows the device label or address.
 
 ### Calculated (Arithmetic)
 

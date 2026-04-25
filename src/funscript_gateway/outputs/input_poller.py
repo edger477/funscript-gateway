@@ -1,5 +1,5 @@
 """InputPoller — polls RestimInputs, manages AS5311 WebSocket connections,
-and evaluates CalculatedInputs."""
+manages BLE Heart Rate connections, and evaluates CalculatedInputs."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from funscript_gateway.models import (
     As5311Input,
     CalculatedInput,
     FunscriptAxisInput,
+    HeartRateInput,
     RestimCondition,
     RestimInput,
     TasmotaInput,
@@ -27,6 +28,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _LOOP_INTERVAL_S = 0.1  # inner loop tick — actual poll rate governed per-input
+
+_HR_MEASUREMENT_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
+
+
+def _parse_hr_measurement(data: bytes) -> int:
+    """Parse GATT Heart Rate Measurement characteristic (0x2A37)."""
+    flags = data[0]
+    if flags & 0x01:  # 16-bit HR value
+        return int.from_bytes(data[1:3], "little")
+    return data[1]  # 8-bit HR value
 
 
 def _fetch_json(url: str) -> dict:
@@ -121,7 +132,8 @@ class InputPoller:
         self._running = False
         self._task: asyncio.Task | None = None
         self._last_poll: dict[str, float] = {}  # input name → last poll time
-        self._ws_tasks: dict[str, asyncio.Task] = {}  # input name → WS connection task
+        self._ws_tasks: dict[str, asyncio.Task] = {}   # url → AS5311 WS task
+        self._ble_tasks: dict[str, asyncio.Task] = {}  # address → BLE HR task
 
     async def start(self) -> None:
         self._running = True
@@ -131,14 +143,17 @@ class InputPoller:
         self._running = False
         for task in self._ws_tasks.values():
             task.cancel()
+        for task in self._ble_tasks.values():
+            task.cancel()
         if self._task is not None:
             self._task.cancel()
-        tasks = list(self._ws_tasks.values())
+        tasks = list(self._ws_tasks.values()) + list(self._ble_tasks.values())
         if self._task is not None:
             tasks.append(self._task)
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._ws_tasks.clear()
+        self._ble_tasks.clear()
         self._task = None
 
     async def _loop(self) -> None:
@@ -172,6 +187,22 @@ class InputPoller:
             for url in list(self._ws_tasks):
                 if url not in active_urls:
                     self._ws_tasks.pop(url).cancel()
+
+            # One BLE task per unique device address
+            active_addresses = {
+                inp.device_address
+                for inp in self._app_state.inputs
+                if isinstance(inp, HeartRateInput) and inp.enabled and inp.device_address
+            }
+            for addr in active_addresses:
+                task = self._ble_tasks.get(addr)
+                if task is None or task.done():
+                    self._ble_tasks[addr] = asyncio.ensure_future(
+                        self._ble_loop_hr(addr)
+                    )
+            for addr in list(self._ble_tasks):
+                if addr not in active_addresses:
+                    self._ble_tasks.pop(addr).cancel()
 
             self._evaluate_calculated()
             await asyncio.sleep(_LOOP_INTERVAL_S)
@@ -237,6 +268,58 @@ class InputPoller:
                 for inp in self._as5311_inputs_for_url(url):
                     inp.is_error = True
                 logger.debug("AS5311 WS '%s' error: %s", url, exc)
+                await asyncio.sleep(5.0)
+
+    def _hr_inputs_for_address(self, address: str) -> list[HeartRateInput]:
+        return [
+            inp for inp in self._app_state.inputs
+            if isinstance(inp, HeartRateInput) and inp.device_address == address
+        ]
+
+    async def _ble_loop_hr(self, address: str) -> None:
+        try:
+            from bleak import BleakClient
+        except ImportError:
+            logger.error(
+                "bleak is not installed — Heart Rate BLE inputs will not work. "
+                "Run: pip install bleak"
+            )
+            for inp in self._hr_inputs_for_address(address):
+                inp.is_error = True
+            return
+
+        while self._running:
+            try:
+                async with BleakClient(address) as client:
+                    for inp in self._hr_inputs_for_address(address):
+                        inp.is_error = False
+                    logger.debug("HeartRate: connected to %s", address)
+
+                    def _on_hr(characteristic, data: bytearray) -> None:  # noqa: ARG001
+                        bpm = _parse_hr_measurement(bytes(data))
+                        for inp in self._hr_inputs_for_address(address):
+                            inp.current_bpm = bpm
+                            span = inp.scale_max_bpm - inp.scale_min_bpm
+                            if span > 0:
+                                inp.current_value = max(
+                                    0.0,
+                                    min(100.0, (bpm - inp.scale_min_bpm) / span * 100.0),
+                                )
+                            else:
+                                inp.current_value = 0.0
+
+                    await client.start_notify(_HR_MEASUREMENT_UUID, _on_hr)
+                    while self._running and client.is_connected:
+                        await asyncio.sleep(1.0)
+
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:  # noqa: BLE001
+                if not self._running:
+                    return
+                for inp in self._hr_inputs_for_address(address):
+                    inp.is_error = True
+                logger.debug("HeartRate BLE '%s' error: %s", address, exc)
                 await asyncio.sleep(5.0)
 
     def _evaluate_calculated(self) -> None:
