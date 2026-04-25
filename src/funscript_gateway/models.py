@@ -131,7 +131,26 @@ class TasmotaInput:
     is_error: bool = False
 
 
-AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput, As5311Input, ArithmeticInput, TasmotaInput]
+@dataclass
+class HeartRateInput:
+    """BLE Heart Rate Profile sensor (chest strap or watch in broadcast mode).
+
+    Subscribes to GATT characteristic 0x2A37 and maps BPM linearly to 0–100
+    using configurable min/max BPM bounds.
+    """
+    name: str
+    device_address: str = ""      # BLE address as reported by Windows (may be UUID on Win)
+    device_label: str = ""        # human-readable device name (display only, not used for connection)
+    enabled: bool = True
+    scale_min_bpm: int = 40       # BPM that maps to output 0
+    scale_max_bpm: int = 180      # BPM that maps to output 100
+    # Runtime fields (not persisted):
+    current_value: float = 0.0    # 0–100 scaled
+    current_bpm: int = 0
+    is_error: bool = False
+
+
+AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput, As5311Input, ArithmeticInput, TasmotaInput, HeartRateInput]
 
 
 PLAYER_DEFAULT_PORTS: dict[str, int] = {

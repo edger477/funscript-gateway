@@ -1,7 +1,7 @@
 # funscript-gateway — Technical Specification
 
 **Version:** 0.1.5  
-**Date:** 2026-04-24  
+**Date:** 2026-04-25  
 **Status:** Draft
 
 ---
@@ -22,9 +22,10 @@
    - 5.4 [AS5311 Magnetic Encoder Input](#54-as5311-magnetic-encoder-input)
    - 5.5 [Tasmota Input](#55-tasmota-input)
    - 5.6 [Calculated Input (Arithmetic)](#56-calculated-input-arithmetic)
-   - 5.7 [Funscript File Discovery](#57-funscript-file-discovery)
-   - 5.8 [Funscript Parsing](#58-funscript-parsing)
-   - 5.9 [Value Interpolation](#59-value-interpolation)
+   - 5.7 [Heart Rate Input (BLE)](#57-heart-rate-input-ble)
+   - 5.8 [Funscript File Discovery](#58-funscript-file-discovery)
+   - 5.9 [Funscript Parsing](#59-funscript-parsing)
+   - 5.10 [Value Interpolation](#510-value-interpolation)
 6. [Output System](#6-output-system)
    - 6.1 [Plugin Architecture](#61-plugin-architecture)
    - 6.2 [Threshold Switch Logic](#62-threshold-switch-logic)
@@ -93,6 +94,7 @@ Device Drivers
 | HTTP client | `urllib.request` (stdlib) via `asyncio.to_thread` | Avoids aiohttp's `add_reader`/`add_writer` calls, which are not implemented on Windows `ProactorEventLoop` |
 | MQTT client | `paho-mqtt` threaded loop (`loop_start`/`loop_stop`) | paho manages its own network thread; no asyncio socket integration, fully compatible with Windows `ProactorEventLoop` |
 | Config format | TOML (`tomllib` stdlib + `tomli_w`) | Human-readable, stdlib read support in Python 3.11+ |
+| BLE client | `bleak` (WinRT backend) | Asyncio-native BLE; uses WinRT internally, compatible with `ProactorEventLoop` |
 | Packaging | `pyproject.toml` + optional PyInstaller | Single-binary distribution for Windows |
 
 ### Dependency Summary
@@ -104,6 +106,7 @@ dependencies = [
     "qasync>=0.27",
     "paho-mqtt>=1.6",
     "tomli_w>=1.0",   # TOML write (stdlib only covers read in 3.11)
+    "bleak>=0.21",    # BLE Heart Rate Profile input
 ]
 ```
 
@@ -113,6 +116,7 @@ dependencies = [
 
 - **HTTP** (`TasmotaDriver`, `MpcHcBackend`): blocking `urllib.request` calls wrapped with `asyncio.to_thread`.
 - **MQTT** (`MqttDriver`): paho-mqtt's own background network thread (`loop_start`/`loop_stop`), which does not touch the asyncio event loop's socket layer.
+- **BLE** (`HeartRateInput` via `bleak`): bleak's WinRT backend wraps Windows `IAsyncOperation` calls into asyncio futures without using `add_reader`/`add_writer`. Fully compatible.
 
 No third-party funscript or player-protocol libraries are used. All protocol handling is implemented directly, following the restim reference.
 
@@ -299,7 +303,7 @@ The active backend is determined by `GatewayConfig.player.type` (`"heresphere"` 
 
 ## 5. Input System
 
-The application supports six types of inputs. All inputs produce a `current_value: float` in the range `[0.0, 100.0]`. Outputs read from any input type uniformly using the input's name.
+The application supports seven types of inputs. All inputs produce a `current_value: float` in the range `[0.0, 100.0]`. Outputs read from any input type uniformly using the input's name.
 
 ### 5.1 Funscript Axis Input
 
@@ -514,7 +518,67 @@ The live formula label in the dialog shows the expression, e.g. `(A × 2 + B) ÷
 
 `ArithmeticInput` is evaluated continuously regardless of player state.
 
-### 5.7 Funscript File Discovery
+### 5.7 Heart Rate Input (BLE)
+
+A `HeartRateInput` subscribes to a Bluetooth Low Energy peripheral that implements the Bluetooth SIG Heart Rate Profile. It receives BPM notifications via GATT characteristic `0x2A37` (Heart Rate Measurement) and maps them linearly to a 0–100 output value. Evaluated continuously regardless of player state.
+
+**Configuration fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | str | — | Input name |
+| `device_address` | str | `""` | BLE device address as reported by Windows (may be a UUID-format string on WinRT) |
+| `device_label` | str | `""` | Human-readable device name; display only, not used for connection |
+| `enabled` | bool | `True` | Whether to connect and read |
+| `scale_min_bpm` | int | `40` | BPM value that maps to output 0 |
+| `scale_max_bpm` | int | `180` | BPM value that maps to output 100 |
+
+**Runtime fields (not persisted):**
+
+| Field | Description |
+|-------|-------------|
+| `current_value` | Linearly scaled 0–100 value |
+| `current_bpm` | Raw BPM from the last received notification |
+| `is_error` | `True` when the BLE connection is not established |
+
+**GATT identifiers:**
+
+| Element | UUID |
+|---------|------|
+| Heart Rate Service | `0000180d-0000-1000-8000-00805f9b34fb` |
+| Heart Rate Measurement characteristic | `00002a37-0000-1000-8000-00805f9b34fb` |
+
+**Measurement parsing (GATT spec):**
+
+```python
+def _parse_hr_measurement(data: bytes) -> int:
+    flags = data[0]
+    if flags & 0x01:        # bit 0: 0 = 8-bit value, 1 = 16-bit value
+        return int.from_bytes(data[1:3], "little")
+    return data[1]
+```
+
+**BPM → 0–100 mapping:**
+
+```
+output = clamp((bpm − scale_min_bpm) / (scale_max_bpm − scale_min_bpm) × 100, 0, 100)
+```
+
+**Device compatibility:**
+
+| Device type | Status |
+|-------------|--------|
+| BLE chest straps (Polar H10, Wahoo TICKR, Garmin HRM, Coospo, etc.) | Supported — implement standard HRP |
+| Polar / Garmin watches | Supported when *Broadcast Heart Rate* is active in the watch activity |
+| Apple Watch, Samsung Galaxy Watch, Fitbit | Not supported — no standard GATT HR exposure |
+
+The device must be paired in Windows Bluetooth settings before `bleak` can connect to it.
+
+**Connection management:** The `InputPoller` maintains one asyncio task per unique `device_address`. On connect, notifications are subscribed; the task polls `client.is_connected` every 1 second. On disconnect or error, `is_error` is set to `True` and the task retries after 5 seconds. If `bleak` is not installed, the task logs an error and exits without crashing.
+
+**Dialog — device discovery:** The `HeartRateInputDialog` provides a **Scan…** button that calls `BleakScanner.discover(timeout=5.0, service_uuids=[HR_SERVICE_UUID])` via `asyncio.ensure_future`. Discovered devices are shown in a dropdown; selecting one auto-fills the address and label fields. The address field is also directly editable for manual entry.
+
+### 5.8 Funscript File Discovery
 
 Funscript files follow the naming convention derived from restim:
 
@@ -542,7 +606,7 @@ If a previously loaded file path changes, auto-discovered axis entries are re-va
 
 **Additional search paths:** Users may configure extra directories to search. Discovery checks the video's own directory first, then each additional search path in order.
 
-### 5.8 Funscript Parsing
+### 5.9 Funscript Parsing
 
 A funscript file is a UTF-8 JSON document:
 
@@ -576,7 +640,7 @@ def load(self, path: str) -> list[tuple[int, int]]:
 
 The sorted action list is stored in memory for the lifetime of the axis. Files are re-read when the user explicitly refreshes or when the video changes.
 
-### 5.9 Value Interpolation
+### 5.10 Value Interpolation
 
 Given a playback position `t_ms` and the sorted action list, the current value is computed using **linear interpolation** between the two surrounding keyframes.
 
@@ -1177,7 +1241,7 @@ Displays all configured inputs. Updated when inputs are added/removed and at the
 | Column | Content |
 |--------|---------|
 | En | Enabled checkbox |
-| Type | "Funscript Axis" / "Restim" / "Calculated (Logical)" / "AS5311" / "Tasmota" / "Calculated (Arithmetic)" |
+| Type | "Funscript Axis" / "Restim" / "Calculated (Logical)" / "AS5311" / "Tasmota" / "Heart Rate (BLE)" / "Calculated (Arithmetic)" |
 | Name | Input name string |
 | Value | Live horizontal progress bar (0–100) with label |
 | Status | Type-specific status (see below) |
@@ -1192,11 +1256,12 @@ Displays all configured inputs. Updated when inputs are added/removed and at the
 | Calculated (Logical) | "N entr(y/ies)" |
 | AS5311 | "X.Xg–Y.Yg mm" range summary / "Error" (red) |
 | Tasmota | host string / "Error" (red) |
+| Heart Rate (BLE) | device label or address / "Error" (red) |
 | Calculated (Arithmetic) | "N entries, ÷W" (where W = total weight divisor) |
 
 **Toolbar actions:**
 
-- **Add** — dropdown menu with six options: *Funscript Axis*, *Restim*, *AS5311 Sensor*, *Tasmota*, *Calculated - Logical*, *Calculated - Arithmetic*
+- **Add** — dropdown menu with seven options: *Funscript Axis*, *Restim*, *AS5311 Sensor*, *Tasmota*, *Heart Rate (BLE)*, *Calculated - Logical*, *Calculated - Arithmetic*
 - **Edit** — opens the edit dialog for the selected input (single-selection only)
 - **Remove** — removes selected input(s); disabled if any selected input has "Used In" > 0
 - **Refresh** — re-run funscript file discovery for the current video
@@ -1209,6 +1274,7 @@ Displays all configured inputs. Updated when inputs are added/removed and at the
 - *Calculated (Arithmetic)*: name, enabled, dynamic entry rows (Add Entry button grows the list), live formula label. Each row has: input selection (combo, expanding) and multiplier (combo, 1–4, fixed 60 px). Entries may reference primary inputs and Calculated (Logical) inputs. Requires at least 1 entry.
 - *AS5311 Sensor*: name, WebSocket URL, threshold (mm), range (mm), enabled checkbox. Value bar shows position in mm; status shows threshold–range bounds.
 - *Tasmota*: name, host, device index (1–8), poll interval, timeout, enabled checkbox. Status column shows the host string or "Error".
+- *Heart Rate (BLE)*: name, device address (editable text field), device label (display), Scan… button (runs 5-second BLE discovery filtered to HR Service UUID, populates dropdown), min BPM (→ 0), max BPM (→ 100), enabled checkbox. Status column shows device label/address or "Error". Value bar format: "72 BPM".
 
 ### 8.5 Outputs Tab
 
@@ -1402,7 +1468,21 @@ class TasmotaInput:
     is_error: bool = False              # True when last poll failed
 
 
-AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput, As5311Input, ArithmeticInput, TasmotaInput]
+@dataclass
+class HeartRateInput:
+    name: str
+    device_address: str = ""           # BLE address (WinRT may return UUID-format string)
+    device_label: str = ""             # display only
+    enabled: bool = True
+    scale_min_bpm: int = 40            # BPM → output 0
+    scale_max_bpm: int = 180           # BPM → output 100
+    # runtime fields:
+    current_value: float = 0.0         # linearly scaled 0–100
+    current_bpm: int = 0               # raw BPM from last notification
+    is_error: bool = False             # True when BLE connection is not established
+
+
+AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput, As5311Input, ArithmeticInput, TasmotaInput, HeartRateInput]
 ```
 
 ### `PlayerConfig`
@@ -1648,6 +1728,8 @@ Main Thread
           │     ├── RestimInput: asyncio.to_thread → urllib.request (thread pool, per poll_interval_s)
           │     ├── TasmotaInput: asyncio.to_thread → urllib.request (thread pool, per poll_interval_s)
           │     ├── As5311Input: one asyncio WS task per unique URL (websockets library)
+          │     ├── HeartRateInput: one asyncio BLE task per unique address (bleak WinRT backend)
+          │     │     └── notifications delivered on asyncio event loop via WinRT callback dispatch
           │     ├── CalculatedInput (Logical): evaluated synchronously each tick from primary inputs' current_value
           │     └── ArithmeticInput: evaluated synchronously after logical inputs (two-pass order)
           ├── OutputManager evaluation loop (50 ms timer)
@@ -1773,7 +1855,7 @@ funscript-gateway/
 │           ├── tray.py              # SystemTrayIcon
 │           ├── status_tab.py
 │           ├── inputs_tab.py        # Inputs tab (replaces axes_tab.py)
-│           ├── input_dialogs.py     # FunscriptAxisDialog, RestimDialog, CalculatedDialog, As5311Dialog, TasmotaInputDialog, ArithmeticDialog
+│           ├── input_dialogs.py     # FunscriptAxisDialog, RestimDialog, CalculatedDialog, As5311Dialog, TasmotaInputDialog, HeartRateInputDialog, ArithmeticDialog
 │           ├── outputs_tab.py
 │           ├── settings_tab.py
 │           └── output_dialog.py     # Add/Edit output dialog

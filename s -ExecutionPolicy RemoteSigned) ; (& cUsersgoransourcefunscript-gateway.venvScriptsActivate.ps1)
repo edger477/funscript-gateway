@@ -1,0 +1,76 @@
+[33mcommit 0218a2fc1efe9464f0ea05cb8950b441d3674496[m
+Author: Goran Obradovic <[1;31mgoran.obradovic@gmail.com[m>
+Date:   Sat Apr 11 19:50:30 2026 +0200
+
+    Add README, update SPEC to match implementation, bump to 0.1.1
+    
+    - Add README.md with usage, player setup, and config examples
+    - Update SPEC: replace aiohttp/aiomqtt with urllib+paho-mqtt threaded loop
+    - Update SPEC: add username/password to MqttOutputConfig
+    - Update SPEC: eval loop pseudocode includes on_missing_axis and driver=None guard
+    - Update SPEC: threading model reflects asyncio.to_thread and paho background thread
+    - Update SPEC: output dialog mentions on_missing_axis dropdown
+    - Bump version to 0.1.1
+    
+    Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+[33mcommit f5abfcaa8d8a05e9e827dea9ac9e579e26063a59[m
+Author: Goran Obradovic <[1;31mgoran.obradovic@gmail.com[m>
+Date:   Sat Apr 11 17:50:49 2026 +0200
+
+    Replace aiomqtt with paho-mqtt threaded loop
+    
+    aiomqtt internally calls add_reader/add_writer on the asyncio event loop,
+    which raises NotImplementedError on Windows where qasync wraps
+    ProactorEventLoop. Replace with paho-mqtt's own loop_start/loop_stop
+    background thread which has no interaction with asyncio's socket layer.
+    
+    MqttDriver.connect() uses asyncio.to_thread for the blocking connect/wait,
+    set_state() calls paho.publish() directly (thread-safe, non-blocking).
+    Connection failure at startup logs a warning and marks the output inactive
+    instead of crashing the app.
+    
+    Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+[33mcommit 5bb5281ce3df6f2413b33e243433f73ef9f98380[m
+Author: Goran Obradovic <[1;31mgoran.obradovic@gmail.com[m>
+Date:   Sat Apr 11 17:36:37 2026 +0200
+
+    Fix Windows event loop error and add MQTT credentials
+    
+    Replace aiohttp with asyncio.to_thread + urllib.request in Tasmota
+    driver and MPC-HC backend. qasync 0.28 on Windows wraps ProactorEventLoop
+    which doesn't implement add_reader/add_writer; urllib runs in a thread
+    pool and bypasses the issue entirely. Also removes aiohttp dependency.
+    
+    Add username/password fields to MqttOutputConfig, wired through config
+    serialization, aiomqtt client construction, and the output dialog
+    (password field uses masked echo mode).
+    
+    Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+[33mcommit e73d09e2ebb4af4f71f616dae3e51cf640ef694d[m
+Author: Goran Obradovic <[1;31mgoran.obradovic@gmail.com[m>
+Date:   Sat Apr 11 15:40:53 2026 +0200
+
+    Add GitHub Actions release workflow
+    
+    Builds Windows exe with PyInstaller on tag push, runs tests first,
+    then creates a GitHub release with the exe attached.
+    
+    Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+[33mcommit cd0d52da8e7ef08026877b4bf5a782c8788455f5[m
+Author: Goran Obradovic <[1;31mgoran.obradovic@gmail.com[m>
+Date:   Sat Apr 11 15:08:31 2026 +0200
+
+    Initial implementation of funscript-gateway
+    
+    Bridge service connecting video players (HereSphere, MPC-HC) to smart
+    home outputs (Tasmota, MQTT) via funscript haptic axis data. Includes
+    full async architecture (asyncio + qasync + PySide6), threshold signal
+    processor with hysteresis, configurable per-output behavior for pause,
+    disconnect, and missing-axis states, system tray UI, and PyInstaller
+    build script.
+    
+    Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
