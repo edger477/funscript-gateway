@@ -199,10 +199,20 @@ class MqttOutputConfig:
 
 
 @dataclass
+class WsOutputConfig:
+    """Configuration for a WebSocket continuous-value output."""
+    url: str = "ws://localhost:12346/sensors/pressure"
+    field_name: str = "pressure"
+    send_interval_s: float = 1.0
+    min_output: float = 100000.0
+    max_output: float = 110000.0
+
+
+@dataclass
 class OutputConfig:
     name: str = ""
     enabled: bool = True
-    type: Literal["threshold_tasmota", "threshold_mqtt"] = "threshold_tasmota"
+    type: Literal["threshold_tasmota", "threshold_mqtt", "ws_value"] = "threshold_tasmota"
     input_name: str = ""
     on_pause: Literal["hold", "force_on", "force_off"] = "hold"
     on_disconnect: Literal["hold", "force_on", "force_off"] = "force_off"
@@ -210,6 +220,7 @@ class OutputConfig:
     threshold: ThresholdSwitchConfig = field(default_factory=ThresholdSwitchConfig)
     tasmota: TasmotaOutputConfig = field(default_factory=TasmotaOutputConfig)
     mqtt: MqttOutputConfig = field(default_factory=MqttOutputConfig)
+    ws: WsOutputConfig = field(default_factory=WsOutputConfig)
 
 
 @dataclass

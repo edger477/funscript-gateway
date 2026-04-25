@@ -34,6 +34,7 @@ from funscript_gateway.models import (
     TasmotaInput,
     TasmotaOutputConfig,
     ThresholdSwitchConfig,
+    WsOutputConfig,
 )
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,7 @@ def _output_from_dict(d: dict) -> OutputConfig:
     threshold_d = d.get("threshold", {})
     tasmota_d = d.get("tasmota", {})
     mqtt_d = d.get("mqtt", {})
+    ws_d = d.get("ws", {})
 
     threshold = ThresholdSwitchConfig(
         threshold=float(threshold_d.get("threshold", 50.0)),
@@ -189,6 +191,13 @@ def _output_from_dict(d: dict) -> OutputConfig:
         qos=int(mqtt_d.get("qos", 0)),
         retain=bool(mqtt_d.get("retain", False)),
     )
+    ws = WsOutputConfig(
+        url=ws_d.get("url", "ws://localhost:12346/sensors/pressure"),
+        field_name=ws_d.get("field_name", "pressure"),
+        send_interval_s=float(ws_d.get("send_interval_s", 1.0)),
+        min_output=float(ws_d.get("min_output", 100000.0)),
+        max_output=float(ws_d.get("max_output", 110000.0)),
+    )
     # Support old key names for backwards compatibility
     input_name = d.get("input_name", d.get("axis_name", ""))
     on_missing = d.get("on_missing_input", d.get("on_missing_axis", "force_off"))
@@ -203,6 +212,7 @@ def _output_from_dict(d: dict) -> OutputConfig:
         threshold=threshold,
         tasmota=tasmota,
         mqtt=mqtt,
+        ws=ws,
     )
 
 
@@ -390,6 +400,13 @@ def _output_to_dict(output: OutputConfig) -> dict:
             "status_topic": output.mqtt.status_topic,
             "qos": output.mqtt.qos,
             "retain": output.mqtt.retain,
+        },
+        "ws": {
+            "url": output.ws.url,
+            "field_name": output.ws.field_name,
+            "send_interval_s": output.ws.send_interval_s,
+            "min_output": output.ws.min_output,
+            "max_output": output.ws.max_output,
         },
     }
 

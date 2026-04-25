@@ -31,7 +31,8 @@
    - 6.2 [Threshold Switch Logic](#62-threshold-switch-logic)
    - 6.3 [Tasmota Device Driver](#63-tasmota-device-driver)
    - 6.4 [MQTT Switch Driver](#64-mqtt-switch-driver)
-   - 6.5 [Output Evaluation Loop](#65-output-evaluation-loop)
+   - 6.5 [WebSocket Value Driver](#65-websocket-value-driver)
+   - 6.6 [Output Evaluation Loop](#66-output-evaluation-loop)
 7. [Configuration Persistence](#7-configuration-persistence)
 8. [User Interface](#8-user-interface)
    - 8.1 [System Tray](#81-system-tray)
@@ -689,7 +690,7 @@ The output system separates two concerns:
 - **Signal processors**: transform an input value (0–100 float) into a discrete state (on/off, or a normalised 0–1 float for future analog outputs).
 - **Device drivers**: receive a state change command and deliver it to a physical or virtual device.
 
-This separation allows any signal processor to be combined with any device driver. The current implemented combination is **Threshold → (Tasmota | MQTT)**.
+This separation allows any signal processor to be combined with any device driver. The current implemented combinations are **Threshold → (Tasmota | MQTT)** and **Value passthrough → WebSocket**.
 
 ```
 AnyInput.current_value (float 0-100)
@@ -911,7 +912,76 @@ If `status_topic` is configured, the driver subscribes on connect via `on_connec
 
 If the broker is unreachable, `connect()` waits up to 10 seconds for `on_connect` to fire. On timeout, `loop_stop()` is called and a `ConnectionError` is raised. The `OutputManager` catches this, logs a warning, and leaves the output inactive (driver set to `None`). The output will remain inactive until the user triggers a reload via the UI.
 
-### 6.5 Output Evaluation Loop
+### 6.5 WebSocket Value Driver
+
+The `WsDriver` sends a continuously-updated numeric value to a WebSocket endpoint as JSON at a configurable interval. Unlike threshold drivers, it does not convert the input to a boolean — it maps the 0–100 input directly to a configurable output range.
+
+**Configuration (`WsOutputConfig`):**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `url` | str | `"ws://localhost:12346/sensors/pressure"` | WebSocket endpoint URL |
+| `field_name` | str | `"pressure"` | JSON key in the message payload; must be a valid identifier |
+| `send_interval_s` | float | `1.0` | How often to send, in seconds (range 0.1–10) |
+| `min_output` | float | `100000.0` | Output value when input = 0 |
+| `max_output` | float | `110000.0` | Output value when input = 100 |
+
+**Message format:**
+
+```json
+{"pressure": 105000.0}
+```
+
+**Mapping formula:**
+
+```
+output = min_output + (max_output − min_output) × input ÷ 100
+```
+
+At input = 0 → output = `min_output`. At input = 100 → output = `max_output`.
+
+**Lifecycle:**
+
+```
+await driver.connect()     # starts the background WS loop task
+driver.set_value(float)    # updates the cached input value (non-blocking, called from eval loop)
+await driver.disconnect()  # cancels the background task
+```
+
+**Connection management:**
+
+The driver runs a persistent `_ws_loop` asyncio task. If the connection drops or is never established, the loop retries after 5 seconds. `set_value()` merely updates a cached `_input_value` field; the actual send is done by the background loop at the configured interval.
+
+**Implementation sketch:**
+
+```python
+class WsDriver:
+    async def _ws_loop(self) -> None:
+        while self._running:
+            try:
+                async with websockets.connect(self.config.url) as ws:
+                    while self._running:
+                        span = self.config.max_output - self.config.min_output
+                        value = self.config.min_output + span * self._input_value / 100.0
+                        await ws.send(json.dumps({self.config.field_name: value}))
+                        await asyncio.sleep(self.config.send_interval_s)
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                await asyncio.sleep(5.0)
+```
+
+**Use case — Heart Rate → restim pressure:**
+
+Configure a WebSocket output with:
+- URL: `ws://localhost:12346/sensors/pressure`
+- Field name: `pressure`
+- Min output: `100000` (restim default pressure threshold)
+- Max output: `110000` (threshold + default range)
+
+A Heart Rate (BLE) input feeding this output will drive restim's pressure effect in proportion to BPM, without requiring any additional middleware.
+
+### 6.6 Output Evaluation Loop
 
 The `OutputManager` runs a single asyncio task that evaluates all configured outputs at 20 Hz (every 50 ms).
 
@@ -1286,10 +1356,10 @@ Displays all configured outputs. Updated at the 20 Hz loop tick.
 |--------|---------|
 | Enabled | Checkbox toggle |
 | Name | Output name |
-| Type | e.g., "Threshold → Tasmota" |
+| Type | e.g., "Threshold → Tasmota", "Value → WebSocket" |
 | Input | Source input name |
 | Value | Current input value (numeric, 0–100) |
-| State | Current output state: ON (green) / OFF (grey) |
+| State | Threshold outputs: ON (green) / OFF (grey). WebSocket outputs: current mapped output value (cyan). |
 
 **Toolbar actions:**
 
@@ -1299,7 +1369,9 @@ Displays all configured outputs. Updated at the 20 Hz loop tick.
 
 **Output configuration dialog** is a two-panel form:
 1. Left panel: output name, input selection (dropdown of all configured inputs), enabled checkbox, on-pause behavior, on-disconnect behavior, on-missing-input behavior.
-2. Right panel: tabbed sub-form for threshold config and device driver config (Tasmota or MQTT).
+2. Right panel: tabbed sub-form. For threshold outputs (Tasmota, MQTT): Threshold tab + Driver tab. For WebSocket outputs: Driver tab only (Threshold tab is hidden); the WebSocket group shows URL, field name (with `?` help button), send interval, min output, and max output.
+
+Field name validation: must match `^[A-Za-z_$][A-Za-z0-9_$]*$` (standard identifier). Validated on dialog accept.
 
 `on_pause` dropdown options: `hold` (default), `force_off`, `force_on`.
 `on_disconnect` dropdown options: `force_off` (default), `hold`, `force_on`.
@@ -1533,6 +1605,14 @@ class MqttOutputConfig:
     qos: int = 0
     retain: bool = False
 
+@dataclass
+class WsOutputConfig:
+    url: str = "ws://localhost:12346/sensors/pressure"
+    field_name: str = "pressure"       # JSON key; must be a valid identifier
+    send_interval_s: float = 1.0      # seconds between sends (0.1–10)
+    min_output: float = 100000.0      # output value when input = 0
+    max_output: float = 110000.0      # output value when input = 100
+
 # --- Combined output config ---
 
 from typing import Literal
@@ -1542,7 +1622,7 @@ from typing import Union
 class OutputConfig:
     name: str = ""
     enabled: bool = True
-    type: Literal["threshold_tasmota", "threshold_mqtt"] = "threshold_tasmota"
+    type: Literal["threshold_tasmota", "threshold_mqtt", "ws_value"] = "threshold_tasmota"
     input_name: str = ""
     on_pause: Literal["hold", "force_on", "force_off"] = "hold"
     on_disconnect: Literal["hold", "force_on", "force_off"] = "force_off"
@@ -1550,6 +1630,7 @@ class OutputConfig:
     threshold: ThresholdSwitchConfig = field(default_factory=ThresholdSwitchConfig)
     tasmota: TasmotaOutputConfig = field(default_factory=TasmotaOutputConfig)
     mqtt: MqttOutputConfig = field(default_factory=MqttOutputConfig)
+    ws: WsOutputConfig = field(default_factory=WsOutputConfig)
 ```
 
 ### `GatewayConfig`
@@ -1848,7 +1929,8 @@ funscript-gateway/
 │       │   ├── input_poller.py      # InputPoller: polls RestimInput, evaluates CalculatedInput
 │       │   ├── threshold.py         # ThresholdSwitchProcessor
 │       │   ├── tasmota.py           # TasmotaDriver
-│       │   └── mqtt.py              # MqttDriver
+│       │   ├── mqtt.py              # MqttDriver
+│       │   └── ws.py                # WsDriver (WebSocket continuous value)
 │       └── ui/
 │           ├── __init__.py
 │           ├── main_window.py       # MainWindow, tab container
