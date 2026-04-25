@@ -19,6 +19,7 @@ from funscript_gateway.models import (
 from funscript_gateway.outputs.tasmota import TasmotaDriver
 from funscript_gateway.outputs.threshold import ThresholdSwitchProcessor
 from funscript_gateway.outputs.mqtt import MqttDriver
+from funscript_gateway.outputs.ws import WsDriver
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class OutputManager:
         self._running = False
         self._task: asyncio.Task | None = None
         self._mqtt_drivers: list[MqttDriver] = []
+        self._ws_drivers: list[WsDriver] = []
         self._was_connected: bool = False
         self._was_playing: bool = False
 
@@ -53,10 +55,12 @@ class OutputManager:
                 pass
             self._task = None
         await self._disconnect_mqtt_drivers()
+        await self._disconnect_ws_drivers()
 
     async def reload_outputs(self) -> None:
         """Rebuild all output instances from the current config (called after UI changes)."""
         await self._disconnect_mqtt_drivers()
+        await self._disconnect_ws_drivers()
         await self._setup_outputs()
         self._app_state.outputs_updated.emit()
 
@@ -68,6 +72,14 @@ class OutputManager:
                 pass
         self._mqtt_drivers.clear()
 
+    async def _disconnect_ws_drivers(self) -> None:
+        for driver in self._ws_drivers:
+            try:
+                await driver.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+        self._ws_drivers.clear()
+
     async def _setup_outputs(self) -> None:
         """Instantiate all OutputInstance objects from app_state.config.outputs."""
         outputs: list[OutputInstance] = []
@@ -78,7 +90,7 @@ class OutputManager:
         self._app_state.outputs = outputs
 
     async def _create_output_instance(self, cfg: OutputConfig) -> OutputInstance | None:
-        processor = ThresholdSwitchProcessor(cfg.threshold)
+        processor = ThresholdSwitchProcessor(cfg.threshold) if cfg.type != "ws_value" else None
         driver = await self._create_driver(cfg)
         if driver is None:
             return None
@@ -101,6 +113,11 @@ class OutputManager:
                         cfg.name, exc,
                     )
                     return None
+            case "ws_value":
+                driver = WsDriver(cfg.ws)
+                await driver.connect()
+                self._ws_drivers.append(driver)
+                return driver
             case _:
                 logger.warning("Unknown output type '%s' for '%s'.", cfg.type, cfg.name)
                 return None
@@ -152,6 +169,20 @@ class OutputManager:
                 if not output.config.enabled:
                     continue
                 if output.driver is None:
+                    continue
+
+                # WebSocket continuous-value outputs: pass raw input value, no threshold
+                if output.config.type == "ws_value":
+                    inp = self._resolve_input(output.config.input_name)
+                    if inp is not None and self._input_is_available(inp):
+                        if isinstance(inp, FunscriptAxisInput):
+                            raw_value = inp.current_value if is_playing else 0.0
+                        else:
+                            raw_value = inp.current_value
+                    else:
+                        raw_value = 0.0
+                    output.last_input_value = raw_value
+                    output.driver.set_value(raw_value)
                     continue
 
                 inp = self._resolve_input(output.config.input_name)

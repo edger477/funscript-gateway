@@ -337,6 +337,62 @@ qos = 2
 retain = true
 ```
 
+### WebSocket (continuous value)
+
+Sends the input value as a continuous numeric stream to a WebSocket endpoint. Useful for integrating with apps that accept real-time sensor data, such as restim's pressure sensor interface.
+
+| Setting | Description |
+|---------|-------------|
+| **URL** | WebSocket endpoint (e.g. `ws://localhost:12346/sensors/pressure`) |
+| **Field name** | JSON key in the message — must be a valid identifier |
+| **Send interval (s)** | How often to send, in seconds (range 0.1–10, default 1.0) |
+| **Min output** | Output value when input = 0 |
+| **Max output** | Output value when input = 100 |
+
+**Message format:** `{"<field name>": <value>}`
+
+**Mapping formula:** `output = min_output + (max_output − min_output) × input ÷ 100`
+
+The connection is maintained persistently and reconnected automatically on failure.
+
+**On pause / disconnect:** when the input is unavailable or the player is paused (for Funscript Axis inputs), the output value is set to `min_output`.
+
+The State column in the Outputs tab shows the current mapped output value in real time.
+
+#### Example — Heart Rate → restim pressure
+
+To drive restim's pressure effect from a BLE heart rate monitor:
+
+| Setting | Value |
+|---------|-------|
+| **URL** | `ws://localhost:12346/sensors/pressure` |
+| **Field name** | `pressure` |
+| **Send interval** | `1.0` s |
+| **Min output** | `100000` |
+| **Max output** | `110000` |
+
+This maps BPM 0–100 (as scaled by the Heart Rate input) to restim's default pressure range: 100000 is the default threshold and 110000 is threshold + range, so the effect intensity scales naturally with heart rate.
+
+Example output config:
+
+```toml
+[[outputs]]
+name = "hr-pressure"
+enabled = true
+type = "ws_value"
+input_name = "heart-rate"
+on_pause = "hold"
+on_disconnect = "hold"
+on_missing_input = "hold"
+
+[outputs.ws]
+url = "ws://localhost:12346/sensors/pressure"
+field_name = "pressure"
+send_interval_s = 1.0
+min_output = 100000.0
+max_output = 110000.0
+```
+
 ---
 
 ## Configuration file

@@ -32,6 +32,7 @@ _NUM_COLS = 6
 _TYPE_LABELS = {
     "threshold_tasmota": "Threshold → Tasmota",
     "threshold_mqtt": "Threshold → MQTT",
+    "ws_value": "Value → WebSocket",
 }
 
 
@@ -105,14 +106,21 @@ class OutputsTab(QWidget):
             row, _COL_INPUT, QTableWidgetItem(f"{instance.last_input_value:.1f}")
         )
 
-        state_text = "ON" if instance.last_output_state else "OFF"
-        state_item = QTableWidgetItem(state_text)
-        if instance.is_degraded:
-            state_item.setForeground(Qt.GlobalColor.darkYellow)
-        elif instance.last_output_state:
-            state_item.setForeground(Qt.GlobalColor.darkGreen)
+        if cfg.type == "ws_value":
+            ws = cfg.ws
+            span = ws.max_output - ws.min_output
+            out_val = ws.min_output + span * instance.last_input_value / 100.0
+            state_item = QTableWidgetItem(f"{out_val:.2f}")
+            state_item.setForeground(Qt.GlobalColor.darkCyan)
         else:
-            state_item.setForeground(Qt.GlobalColor.darkGray)
+            state_text = "ON" if instance.last_output_state else "OFF"
+            state_item = QTableWidgetItem(state_text)
+            if instance.is_degraded:
+                state_item.setForeground(Qt.GlobalColor.darkYellow)
+            elif instance.last_output_state:
+                state_item.setForeground(Qt.GlobalColor.darkGreen)
+            else:
+                state_item.setForeground(Qt.GlobalColor.darkGray)
         self._table.setItem(row, _COL_STATE, state_item)
 
     def _input_names(self) -> list[str]:

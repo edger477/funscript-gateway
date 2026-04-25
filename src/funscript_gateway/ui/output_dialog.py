@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -26,7 +28,10 @@ from funscript_gateway.models import (
     OutputConfig,
     TasmotaOutputConfig,
     ThresholdSwitchConfig,
+    WsOutputConfig,
 )
+
+_FIELD_NAME_RE = re.compile(r'^[A-Za-z_$][A-Za-z0-9_$]*$')
 
 
 class OutputDialog(QDialog):
@@ -84,20 +89,34 @@ class OutputDialog(QDialog):
         outer.addWidget(left)
 
         # Right panel — tabbed
-        right = QTabWidget()
-        right.addTab(self._build_threshold_tab(), "Threshold")
-        right.addTab(self._build_driver_tab(), "Driver")
-        outer.addWidget(right)
+        self._tabs = QTabWidget()
+        self._threshold_tab_index = 0
+        self._tabs.addTab(self._build_threshold_tab(), "Threshold")
+        self._tabs.addTab(self._build_driver_tab(), "Driver")
+        outer.addWidget(self._tabs)
 
         # Buttons
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
 
         main.addLayout(outer)
         main.addWidget(buttons)
+
+    def _on_accept(self) -> None:
+        if self._driver_type_combo.currentText() == "ws_value":
+            field = self._ws_field_name.text().strip()
+            if not _FIELD_NAME_RE.match(field):
+                QMessageBox.warning(
+                    self,
+                    "Invalid field name",
+                    "Field name must be a valid identifier (letters, digits, _ or $, "
+                    "not starting with a digit).",
+                )
+                return
+        self.accept()
 
     def _build_threshold_tab(self) -> QWidget:
         w = QWidget()
@@ -130,7 +149,7 @@ class OutputDialog(QDialog):
         type_row = QHBoxLayout()
         type_row.addWidget(QLabel("Driver type:"))
         self._driver_type_combo = QComboBox()
-        self._driver_type_combo.addItems(["threshold_tasmota", "threshold_mqtt"])
+        self._driver_type_combo.addItems(["threshold_tasmota", "threshold_mqtt", "ws_value"])
         self._driver_type_combo.setCurrentText(self._initial_config.type)
         type_row.addWidget(self._driver_type_combo)
         type_row.addStretch()
@@ -138,8 +157,10 @@ class OutputDialog(QDialog):
 
         self._tasmota_group = self._build_tasmota_group()
         self._mqtt_group = self._build_mqtt_group()
+        self._ws_group = self._build_ws_group()
         layout.addWidget(self._tasmota_group)
         layout.addWidget(self._mqtt_group)
+        layout.addWidget(self._ws_group)
         layout.addStretch()
 
         self._driver_type_combo.currentTextChanged.connect(self._on_driver_type_changed)
@@ -160,6 +181,29 @@ class OutputDialog(QDialog):
         "repeat interval to a value shorter than the pulse duration — for "
         "example, if you use PulseTime1 160 (60 s), set repeat interval to 45 s.\n\n"
         "Set to 0 to disable (command is only sent on state change)."
+    )
+
+    _WS_HELP = (
+        "WebSocket Output — Continuous Value Stream\n\n"
+        "Sends the input value (mapped to the configured output range) as JSON "
+        "to the configured WebSocket endpoint at a fixed interval.\n\n"
+        "Message format:\n"
+        '    {"<field name>": <value>}\n\n'
+        "The input value (0–100) is linearly mapped:\n"
+        "    output = min_output + (max_output − min_output) × input ÷ 100\n\n"
+        "So at input = 0 → output = min_output, at input = 100 → output = max_output.\n\n"
+        "The connection is maintained persistently and reconnected automatically "
+        "on failure (retry after 5 s).\n\n"
+        "─────────────────────────────────────────\n"
+        "Example — Heart Rate → restim pressure sensor:\n\n"
+        "  URL:             ws://localhost:12346/sensors/pressure\n"
+        "  Field name:      pressure\n"
+        "  Send interval:   1.0 s\n"
+        "  Min output:      100000\n"
+        "  Max output:      110000\n\n"
+        "This maps the input 0–100 range to restim's default pressure window "
+        "(100000 = threshold, 110000 = threshold + range), so a heart rate input "
+        "driving a restim pressure effect scales naturally with BPM."
     )
 
     def _build_tasmota_group(self) -> QGroupBox:
@@ -245,10 +289,60 @@ class OutputDialog(QDialog):
         form.addRow("Retain:", self._mqtt_retain)
         return group
 
+    def _build_ws_group(self) -> QGroupBox:
+        group = QGroupBox("WebSocket")
+        form = QFormLayout(group)
+        cfg = self._initial_config.ws
+
+        self._ws_url = QLineEdit(cfg.url)
+        form.addRow("URL:", self._ws_url)
+
+        field_row = QWidget()
+        field_layout = QHBoxLayout(field_row)
+        field_layout.setContentsMargins(0, 0, 0, 0)
+        self._ws_field_name = QLineEdit(cfg.field_name)
+        ws_help_btn = QToolButton()
+        ws_help_btn.setText("?")
+        ws_help_btn.setToolTip("Click for help on WebSocket output")
+        ws_help_btn.clicked.connect(self._show_ws_help)
+        field_layout.addWidget(self._ws_field_name)
+        field_layout.addWidget(ws_help_btn)
+        form.addRow("Field name:", field_row)
+
+        self._ws_interval = QDoubleSpinBox()
+        self._ws_interval.setRange(0.1, 10.0)
+        self._ws_interval.setDecimals(1)
+        self._ws_interval.setSingleStep(0.1)
+        self._ws_interval.setSuffix(" s")
+        self._ws_interval.setValue(cfg.send_interval_s)
+        form.addRow("Send interval:", self._ws_interval)
+
+        self._ws_min_output = QDoubleSpinBox()
+        self._ws_min_output.setRange(-1e9, 1e9)
+        self._ws_min_output.setDecimals(2)
+        self._ws_min_output.setValue(cfg.min_output)
+        form.addRow("Min output:", self._ws_min_output)
+
+        self._ws_max_output = QDoubleSpinBox()
+        self._ws_max_output.setRange(-1e9, 1e9)
+        self._ws_max_output.setDecimals(2)
+        self._ws_max_output.setValue(cfg.max_output)
+        form.addRow("Max output:", self._ws_max_output)
+
+        return group
+
+    def _show_ws_help(self) -> None:
+        QMessageBox.information(self, "WebSocket Output", self._WS_HELP)
+
     def _on_driver_type_changed(self, driver_type: str) -> None:
         is_tasmota = driver_type == "threshold_tasmota"
+        is_mqtt = driver_type == "threshold_mqtt"
+        is_ws = driver_type == "ws_value"
         self._tasmota_group.setVisible(is_tasmota)
-        self._mqtt_group.setVisible(not is_tasmota)
+        self._mqtt_group.setVisible(is_mqtt)
+        self._ws_group.setVisible(is_ws)
+        # Threshold tab is irrelevant for WebSocket outputs
+        self._tabs.tabBar().setTabVisible(self._threshold_tab_index, not is_ws)
 
     def get_config(self) -> OutputConfig:
         """Return the OutputConfig as configured in the dialog."""
@@ -275,6 +369,13 @@ class OutputDialog(QDialog):
             qos=self._mqtt_qos.value(),
             retain=self._mqtt_retain.isChecked(),
         )
+        ws = WsOutputConfig(
+            url=self._ws_url.text().strip(),
+            field_name=self._ws_field_name.text().strip(),
+            send_interval_s=self._ws_interval.value(),
+            min_output=self._ws_min_output.value(),
+            max_output=self._ws_max_output.value(),
+        )
         return OutputConfig(
             name=self._name_edit.text().strip(),
             enabled=self._enabled_check.isChecked(),
@@ -286,4 +387,5 @@ class OutputDialog(QDialog):
             threshold=threshold,
             tasmota=tasmota,
             mqtt=mqtt,
+            ws=ws,
         )
