@@ -1,6 +1,6 @@
 [project]
 name = "funscript-gateway"
-version = "0.1.6"
+version = "0.1.7"
 description = "Bridge service connecting video players to smart home/IoT outputs via funscript axes"
 requires-python = ">=3.11"
 dependencies = [

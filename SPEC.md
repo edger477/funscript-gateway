@@ -1,6 +1,6 @@
 # funscript-gateway — Technical Specification
 
-**Version:** 0.1.6  
+**Version:** 0.1.7  
 **Date:** 2026-04-25  
 **Status:** Draft
 
