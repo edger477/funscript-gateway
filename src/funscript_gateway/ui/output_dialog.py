@@ -341,10 +341,10 @@ class OutputDialog(QDialog):
         self._tasmota_group.setVisible(is_tasmota)
         self._mqtt_group.setVisible(is_mqtt)
         self._ws_group.setVisible(is_ws)
-        # Threshold tab is irrelevant for WebSocket outputs
-        self._tabs.tabBar().setTabVisible(self._threshold_tab_index, not is_ws)
-        # If the threshold tab is now hidden and still selected, switch to the Driver tab
-        if is_ws and self._tabs.currentIndex() == self._threshold_tab_index:
+        # Threshold tab is irrelevant for WebSocket outputs — disable it so the
+        # Driver tab stays selected without any current-index/visibility quirks
+        self._tabs.setTabEnabled(self._threshold_tab_index, not is_ws)
+        if is_ws:
             self._tabs.setCurrentIndex(1)
 
     def get_config(self) -> OutputConfig:
