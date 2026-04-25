@@ -343,6 +343,9 @@ class OutputDialog(QDialog):
         self._ws_group.setVisible(is_ws)
         # Threshold tab is irrelevant for WebSocket outputs
         self._tabs.tabBar().setTabVisible(self._threshold_tab_index, not is_ws)
+        # If the threshold tab is now hidden and still selected, switch to the Driver tab
+        if is_ws and self._tabs.currentIndex() == self._threshold_tab_index:
+            self._tabs.setCurrentIndex(1)
 
     def get_config(self) -> OutputConfig:
         """Return the OutputConfig as configured in the dialog."""
