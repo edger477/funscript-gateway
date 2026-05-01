@@ -218,9 +218,11 @@ def _output_from_dict(d: dict) -> OutputConfig:
 
 def _config_from_dict(data: dict) -> GatewayConfig:
     player_d = data.get("player", {})
+    _legacy_host = player_d.get("host", "127.0.0.1")
     player = PlayerConfig(
         type=player_d.get("type", "heresphere"),
-        host=player_d.get("host", "127.0.0.1"),
+        heresphere_host=player_d.get("heresphere_host", _legacy_host),
+        mpc_hc_host=player_d.get("mpc_hc_host", _legacy_host),
         port=int(player_d.get("port", 23554)),
         poll_interval_ms=int(player_d.get("poll_interval_ms", 150)),
         restim_autostart_enabled=bool(player_d.get("restim_autostart_enabled", False)),
@@ -415,7 +417,8 @@ def _config_to_dict(config: GatewayConfig) -> dict:
     return {
         "player": {
             "type": config.player.type,
-            "host": config.player.host,
+            "heresphere_host": config.player.heresphere_host,
+            "mpc_hc_host": config.player.mpc_hc_host,
             "port": config.player.port,
             "poll_interval_ms": config.player.poll_interval_ms,
             "restim_autostart_enabled": config.player.restim_autostart_enabled,

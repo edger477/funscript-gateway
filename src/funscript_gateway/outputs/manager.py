@@ -177,6 +177,8 @@ class OutputManager:
                     if inp is not None and self._input_is_available(inp):
                         if isinstance(inp, FunscriptAxisInput):
                             raw_value = inp.current_value if is_playing else 0.0
+                        elif not is_playing:
+                            raw_value = 0.0
                         else:
                             raw_value = inp.current_value
                     else:
@@ -208,9 +210,15 @@ class OutputManager:
                             continue
                         new_state = forced
                 else:
-                    # RestimInput / CalculatedInput: always active, independent of player state
-                    new_state = output.processor.process(inp.current_value)
-                    output.last_input_value = inp.current_value
+                    # All non-funscript inputs respect on_pause when player is not playing.
+                    if not is_playing:
+                        forced = self._handle_pause_behavior(output)
+                        if forced is None:
+                            continue
+                        new_state = forced
+                    else:
+                        new_state = output.processor.process(inp.current_value)
+                        output.last_input_value = inp.current_value
 
                 output.last_output_state = new_state
 

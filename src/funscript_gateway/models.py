@@ -162,8 +162,13 @@ PLAYER_DEFAULT_PORTS: dict[str, int] = {
 @dataclass
 class PlayerConfig:
     type: str = "heresphere"
-    host: str = "127.0.0.1"
+    heresphere_host: str = "127.0.0.1"
+    mpc_hc_host: str = "127.0.0.1"
     port: int = 23554
+
+    @property
+    def host(self) -> str:
+        return self.heresphere_host if self.type == "heresphere" else self.mpc_hc_host
     poll_interval_ms: int = 150
     restim_autostart_enabled: bool = False
     restim_autostart_urls: list[str] = field(default_factory=list)
