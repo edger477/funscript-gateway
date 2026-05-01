@@ -2,6 +2,22 @@
 
 ---
 
+## v0.1.9
+
+### Bug fixes
+
+#### `on_pause` now applies to all input types
+Previously the output's **On pause** setting was silently ignored for any non-Funscript-Axis input (Restim, Calculated — Logical and Arithmetic, AS5311, Tasmota, Heart Rate). Those inputs were treated as "always active regardless of player state", so an output with `on_pause = force_off` would remain on when the player was paused or had no file loaded. The evaluation loop now applies the `on_pause` behavior for all input types when the player is not playing, consistent with how Funscript Axis inputs behave.
+
+`on_disconnect` was not affected — it already applied to all output types.
+
+#### Per-player host address
+The **Host** field in **Settings → Player Settings** is now stored separately for HereSphere and MPC-HC. Previously a single shared field was used, so switching player type would show (and on Apply, overwrite) the other player's address. Each player type now remembers its own host. Switching the type combo live-swaps the displayed address; both are preserved on Apply.
+
+Existing config files using the old single `host` key are automatically migrated — the value is used as the initial address for both player types.
+
+---
+
 ## v0.1.8
 
 ### What is funscript-gateway?

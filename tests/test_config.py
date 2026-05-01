@@ -26,7 +26,8 @@ def _make_full_config() -> GatewayConfig:
     """Build a GatewayConfig with non-default values to test round-trip."""
     player = PlayerConfig(
         type="mpc_hc",
-        host="192.168.1.5",
+        heresphere_host="192.168.1.5",
+        mpc_hc_host="192.168.1.5",
         port=13579,
         poll_interval_ms=200,
     )
@@ -98,10 +99,12 @@ class TestConfigRoundTrip:
 
     def test_player_config_round_trips(self):
         cfg = GatewayConfig()
-        cfg.player = PlayerConfig(type="mpc_hc", host="10.0.0.1", port=9999, poll_interval_ms=300)
+        cfg.player = PlayerConfig(type="mpc_hc", heresphere_host="10.0.0.1", mpc_hc_host="10.0.0.2", port=9999, poll_interval_ms=300)
         result = _roundtrip(cfg)
         assert result.player.type == "mpc_hc"
-        assert result.player.host == "10.0.0.1"
+        assert result.player.heresphere_host == "10.0.0.1"
+        assert result.player.mpc_hc_host == "10.0.0.2"
+        assert result.player.host == "10.0.0.2"  # property returns active type's host
         assert result.player.port == 9999
         assert result.player.poll_interval_ms == 300
 

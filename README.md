@@ -215,7 +215,7 @@ Each output maps one input to one device. Add outputs in the **Outputs** tab.
 | **Name** | Display name |
 | **Input** | Which input value to read |
 | **Enabled** | Toggle without deleting |
-| **On pause** | What to do when playback is paused (only relevant for Funscript Axis inputs): `hold` (keep last state), `force_off`, `force_on` |
+| **On pause** | What to do when playback is paused or stopped: `hold` (keep last state), `force_off`, `force_on` |
 | **On disconnect** | What to do when the player disconnects: `hold`, `force_off`, `force_on` |
 | **On missing input** | What to do when the named input is not in the inputs list: `hold`, `force_off`, `force_on` |
 

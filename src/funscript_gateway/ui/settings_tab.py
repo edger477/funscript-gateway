@@ -105,13 +105,24 @@ class SettingsTab(QWidget):
         layout.addLayout(btn_row)
         layout.addStretch()
 
+        self._heresphere_host: str = "127.0.0.1"
+        self._mpc_hc_host: str = "127.0.0.1"
+        self._current_player_type: str = "heresphere"
+
         self._type_combo.currentTextChanged.connect(self._on_type_changed)
         self._load_from_config()
 
     def _load_from_config(self) -> None:
         cfg = self._app_state.config.player
+        self._heresphere_host = cfg.heresphere_host
+        self._mpc_hc_host = cfg.mpc_hc_host
+        self._current_player_type = cfg.type
+
+        self._type_combo.blockSignals(True)
         self._type_combo.setCurrentText(cfg.type)
-        self._host_edit.setText(cfg.host)
+        self._type_combo.blockSignals(False)
+
+        self._host_edit.setText(cfg.heresphere_host if cfg.type == "heresphere" else cfg.mpc_hc_host)
         self._port_spin.setValue(cfg.port)
         self._poll_spin.setValue(cfg.poll_interval_ms)
         self._autostart_check.setChecked(cfg.restim_autostart_enabled)
@@ -124,6 +135,17 @@ class SettingsTab(QWidget):
             self._paths_list.addItem(p)
 
     def _on_type_changed(self, player_type: str) -> None:
+        # Save the host currently shown in the edit to whichever type we're switching from,
+        # then display the stored host for the new type.
+        if self._current_player_type == "heresphere":
+            self._heresphere_host = self._host_edit.text()
+        else:
+            self._mpc_hc_host = self._host_edit.text()
+        self._host_edit.setText(
+            self._heresphere_host if player_type == "heresphere" else self._mpc_hc_host
+        )
+        self._current_player_type = player_type
+
         visible = player_type == "mpc_hc"
         self._poll_label.setVisible(visible)
         self._poll_spin.setVisible(visible)
@@ -149,8 +171,15 @@ class SettingsTab(QWidget):
         old_host = cfg.host
         old_port = cfg.port
 
+        # Flush the currently displayed host into the right per-type tracker.
+        if self._current_player_type == "heresphere":
+            self._heresphere_host = self._host_edit.text().strip()
+        else:
+            self._mpc_hc_host = self._host_edit.text().strip()
+
         cfg.type = self._type_combo.currentText()
-        cfg.host = self._host_edit.text().strip()
+        cfg.heresphere_host = self._heresphere_host
+        cfg.mpc_hc_host = self._mpc_hc_host
         cfg.port = self._port_spin.value()
         cfg.poll_interval_ms = self._poll_spin.value()
         cfg.restim_autostart_enabled = self._autostart_check.isChecked()

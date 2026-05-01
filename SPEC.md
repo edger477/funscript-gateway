@@ -1,7 +1,7 @@
 # funscript-gateway — Technical Specification
 
-**Version:** 0.1.8  
-**Date:** 2026-04-25  
+**Version:** 0.1.9  
+**Date:** 2026-05-01  
 **Status:** Draft
 
 ---
@@ -1021,9 +1021,16 @@ async def _evaluation_loop(self) -> None:
                         continue  # hold: no command sent
                     new_state = forced
             else:
-                # RestimInput / CalculatedInput: always active regardless of player state
-                new_state = output.processor.process(inp.current_value)
-                output.last_input_value = inp.current_value
+                # All other inputs (Restim, Calculated, AS5311, Tasmota, Heart Rate):
+                # respect on_pause when player is not playing, like FunscriptAxisInput.
+                if not is_playing:
+                    forced = self._handle_pause_behavior(output)
+                    if forced is None:
+                        continue  # hold
+                    new_state = forced
+                else:
+                    new_state = output.processor.process(inp.current_value)
+                    output.last_input_value = inp.current_value
 
             output.last_output_state = new_state
 
@@ -1043,7 +1050,7 @@ async def _evaluation_loop(self) -> None:
         await asyncio.sleep(max(0.0, 0.050 - elapsed))
 ```
 
-**On-pause behavior** is configurable per output and applied on every non-playing tick (not just on transition):
+**On-pause behavior** is configurable per output and applied on every non-playing tick (not just on transition). It applies to **all input types** — Funscript Axis, Restim, Calculated (Logical and Arithmetic), AS5311, Tasmota, and Heart Rate:
 
 | Mode | Behavior |
 |------|----------|
@@ -1120,7 +1127,8 @@ The directory is created on first run if it does not exist.
 ```toml
 [player]
 type = "heresphere"
-host = "127.0.0.1"
+heresphere_host = "127.0.0.1"
+mpc_hc_host = "127.0.0.1"
 port = 23554
 poll_interval_ms = 150
 
@@ -1385,7 +1393,7 @@ Form-based settings for the player connection.
 Player Settings
 ───────────────
 Player Type:     [HereSphere ▼]
-Host:            [127.0.0.1      ]
+Host:            [127.0.0.1      ]   ← per-player; switches when type changes
 Port:            [23554  ]
                  [✓] On start playing, start restim instances
 Restim URLs:     [http://localhost:12348/v1,http://localhost:12349/v1]
@@ -1563,11 +1571,17 @@ AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput, As5311Input, 
 @dataclass
 class PlayerConfig:
     type: str = "heresphere"           # "heresphere" | "mpc_hc"
-    host: str = "127.0.0.1"
+    heresphere_host: str = "127.0.0.1" # host stored per player type
+    mpc_hc_host: str = "127.0.0.1"
     port: int = 23554
     poll_interval_ms: int = 150        # MPC-HC only; ignored by HereSphere (event-driven)
     restim_autostart_enabled: bool = False
     restim_autostart_urls: list[str] = field(default_factory=list)  # base URLs, e.g. ["http://localhost:12348/v1"]
+
+    @property
+    def host(self) -> str:
+        """Returns the host for the currently selected player type."""
+        return self.heresphere_host if self.type == "heresphere" else self.mpc_hc_host
 ```
 
 ### Output Config Hierarchy
@@ -1705,11 +1719,12 @@ class AppState(QObject):
 
 ### Playback Paused or Stopped
 
-- While `connection_state` is `CONNECTED_AND_PAUSED` or `CONNECTED_BUT_NO_FILE_LOADED`, the evaluation loop applies `on_pause` per output on every tick:
+- While `connection_state` is `CONNECTED_AND_PAUSED` or `CONNECTED_BUT_NO_FILE_LOADED`, the evaluation loop applies `on_pause` per output on every tick for **all input types**:
   - `hold`: no command sent; output stays in its last state.
   - `force_off`: `driver.set_state(False)` called each tick (driver deduplicates if state unchanged).
   - `force_on`: `driver.set_state(True)` called each tick.
 - Axis `current_value` is frozen at the last computed value while paused; it does not revert to 0.
+- Non-funscript inputs (Restim, Calculated, etc.) continue polling/evaluating in the background while paused; their `current_value` stays fresh so outputs resume correct behavior as soon as playback restarts.
 
 ### Missing or Unavailable Input
 
