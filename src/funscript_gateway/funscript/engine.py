@@ -112,13 +112,14 @@ class FunscriptEngine:
                 inp.file_missing = True
                 inp.current_value = inp.default_value * 100.0
 
-        # Append auto-discovered axes not yet configured
+        # Append auto-discovered axes not yet configured.
+        # Start disabled so they don't drive outputs until the user opts in.
         for axis_name, fpath in found_files.items():
             if axis_name not in configured_names:
                 actions = parser.load(str(fpath))
                 new_inp = FunscriptAxisInput(
                     name=axis_name,
-                    enabled=True,
+                    enabled=False,
                     default_value=0.0,
                     file_path=str(fpath),
                     actions=actions,

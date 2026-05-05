@@ -2,6 +2,54 @@
 
 ---
 
+## v0.1.10
+
+### New features
+
+#### Data logging
+A new optional CSV logger records all inputs, outputs, and player state at a configurable sample interval. Enable it in **Settings → Data Logging**.
+
+Each session produces a timestamped file:
+
+```
+%APPDATA%\funscript-gateway\data_log\session_YYYYMMDD_HHMMSS.csv
+```
+
+The file uses wide format — one row per sample, one column per signal — so the data can be loaded directly into pandas, Excel, or any analysis tool and columns can be correlated without reshaping.
+
+**Columns per row:**
+
+| Column | Description |
+|--------|-------------|
+| `timestamp` | ISO 8601 datetime with millisecond precision |
+| `wall_time_s` | Unix timestamp as a float (useful for arithmetic) |
+| `player_state` | Connection state name (e.g. `CONNECTED_AND_PLAYING`) |
+| `player_file` | Filename of the currently loaded media (basename only) |
+| `player_time_ms` | Current playback position in milliseconds |
+| `player_speed` | Playback speed multiplier |
+| `{name}_pct` | Input value 0–100 for each configured input |
+| `{name}_mm` | Raw position in mm (AS5311 inputs only) |
+| `{name}_bpm` | Raw BPM reading (Heart Rate inputs only) |
+| `{name}_in` | Input value seen by each output at sample time |
+| `{name}_out` | Output state at sample time: `1` = ON, `0` = OFF |
+
+When a Funscript Axis input has no file for the current video (`file_missing = True`), its `_pct` cell is left empty rather than writing the default value — making "no data" clearly distinguishable from an actual zero in the funscript.
+
+**Settings:**
+
+| Setting | Description |
+|---------|-------------|
+| Enable checkbox | Turns logging on/off; takes effect immediately when Applied |
+| Sample interval | How often to write a row (0.1–60 s, default 1.0 s) |
+| Open log folder | Opens `%APPDATA%\funscript-gateway\data_log\` in Explorer |
+
+The column layout is fixed when a session file is opened (based on the inputs and outputs present at that moment). If you add new inputs or outputs, click Apply in Settings to start a new session file that includes them.
+
+#### Auto-discovered Funscript Axis inputs start disabled
+Previously, when the Funscript Engine discovered axis files for a new video that weren't already in the inputs list, it created the new inputs with `enabled = True`. This meant they could inadvertently start driving outputs. Auto-discovered inputs are now created with `enabled = False` — they appear in the Inputs tab for review and can be enabled explicitly.
+
+---
+
 ## v0.1.9
 
 ### Bug fixes

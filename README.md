@@ -120,7 +120,7 @@ Reads the interpolated value from a `.funscript` file at the current playback po
 | **Default value** | Value (0–1) to use when the funscript file is not found for the current video. Outputs always receive this value when the file is absent; `on_missing_input` does not apply. |
 | **Enabled** | Toggle without deleting |
 
-The **Refresh** button re-runs file discovery for the current video.
+The **Refresh** button re-runs file discovery for the current video. Axes discovered automatically from funscript files start **disabled** — enable them in the Inputs tab once you've reviewed them.
 
 ### Restim
 
@@ -392,6 +392,54 @@ send_interval_s = 1.0
 min_output = 100000.0
 max_output = 110000.0
 ```
+
+---
+
+## Data logging
+
+funscript-gateway can record all inputs, outputs, and player state to a CSV file for later analysis. Enable it in **Settings → Data Logging**.
+
+Each session produces a timestamped file:
+
+```
+%APPDATA%\funscript-gateway\data_log\session_YYYYMMDD_HHMMSS.csv
+```
+
+The file is wide-format — one row per sample, one column per signal — so you can load it directly into pandas or Excel and correlate columns without reshaping:
+
+```python
+import pandas as pd
+df = pd.read_csv(r"%APPDATA%\funscript-gateway\data_log\session_20260505_130000.csv")
+df[["stroke_pct", "hr_pct"]].corr()
+```
+
+**Columns:**
+
+| Column | Description |
+|--------|-------------|
+| `timestamp` | ISO 8601 datetime with millisecond precision |
+| `wall_time_s` | Unix timestamp as a float |
+| `player_state` | Connection state (e.g. `CONNECTED_AND_PLAYING`) |
+| `player_file` | Basename of the currently loaded media file |
+| `player_time_ms` | Current playback position in ms |
+| `player_speed` | Playback speed multiplier |
+| `{name}_pct` | Input value 0–100 for each configured input |
+| `{name}_mm` | Raw position in mm (AS5311 inputs only) |
+| `{name}_bpm` | Raw BPM reading (Heart Rate inputs only) |
+| `{name}_in` | Input value seen by each output |
+| `{name}_out` | Output state: `1` = ON, `0` = OFF |
+
+When a Funscript Axis input has no file for the current video, its `_pct` cell is empty rather than `0` — keeping "no data" distinct from an actual zero in the funscript.
+
+**Settings:**
+
+| Setting | Description |
+|---------|-------------|
+| Enable | Turns logging on/off; takes effect immediately when Applied |
+| Sample interval | How often to write a row (0.1–60 s, default 1.0 s) |
+| Open log folder | Opens the log directory in Explorer |
+
+The column layout is fixed when each session file opens. If you add new inputs or outputs mid-session, click **Apply** in Settings to start a fresh file that includes them.
 
 ---
 

@@ -229,11 +229,18 @@ class OutputConfig:
 
 
 @dataclass
+class DataLoggingConfig:
+    enabled: bool = False
+    interval_s: float = 1.0
+
+
+@dataclass
 class GatewayConfig:
     player: PlayerConfig = field(default_factory=PlayerConfig)
     funscript_search_paths: list[str] = field(default_factory=list)
     inputs: list = field(default_factory=list)  # list[AnyInput]
     outputs: list[OutputConfig] = field(default_factory=list)
+    data_logging: DataLoggingConfig = field(default_factory=DataLoggingConfig)
 
 
 class OutputInstance:

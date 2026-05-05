@@ -23,6 +23,7 @@ from funscript_gateway.models import (
     As5311Input,
     CalculatedEntry,
     CalculatedInput,
+    DataLoggingConfig,
     FunscriptAxisInput,
     GatewayConfig,
     HeartRateInput,
@@ -243,11 +244,17 @@ def _config_from_dict(data: dict) -> GatewayConfig:
         ))
 
     outputs = [_output_from_dict(o) for o in data.get("outputs", [])]
+    dl_d = data.get("data_logging", {})
+    data_logging = DataLoggingConfig(
+        enabled=bool(dl_d.get("enabled", False)),
+        interval_s=float(dl_d.get("interval_s", 1.0)),
+    )
     return GatewayConfig(
         player=player,
         funscript_search_paths=search_paths,
         inputs=inputs,
         outputs=outputs,
+        data_logging=data_logging,
     )
 
 
@@ -429,6 +436,10 @@ def _config_to_dict(config: GatewayConfig) -> dict:
         },
         "inputs": [_input_to_dict(i) for i in config.inputs],
         "outputs": [_output_to_dict(o) for o in config.outputs],
+        "data_logging": {
+            "enabled": config.data_logging.enabled,
+            "interval_s": config.data_logging.interval_s,
+        },
     }
 
 

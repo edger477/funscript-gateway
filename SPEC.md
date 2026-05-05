@@ -1,7 +1,7 @@
 # funscript-gateway — Technical Specification
 
-**Version:** 0.1.9  
-**Date:** 2026-05-01  
+**Version:** 0.1.10  
+**Date:** 2026-05-05  
 **Status:** Draft
 
 ---
@@ -141,10 +141,11 @@ main.py
         │     └── MpcHcBackend
         ├── FunscriptEngine              (synchronous, called from async context)
         ├── InputPoller                  (asyncio task, polls RestimInput & evaluates CalculatedInput)
-        └── OutputManager               (asyncio task, 20 Hz loop)
-              ├── ThresholdSwitchProcessor
-              ├── TasmotaDriver          (async HTTP)
-              └── MqttDriver             (async MQTT)
+        ├── OutputManager               (asyncio task, 20 Hz loop)
+        │     ├── ThresholdSwitchProcessor
+        │     ├── TasmotaDriver          (async HTTP)
+        │     └── MqttDriver             (async MQTT)
+        └── DataLogger                   (asyncio task, configurable interval CSV writer)
 ```
 
 Communication between async tasks and the Qt UI uses Qt signals. Async tasks call `signal.emit(...)` which is thread-safe in PySide6 when invoked from the Qt thread (asyncio runs on the same thread via `qasync`).
@@ -600,7 +601,7 @@ When `PlayerState.file_path` changes to a new non-empty value, the `FunscriptEng
 1. Extract the directory and base name (without extension) from `file_path`.
 2. Glob for `{basename}.*.funscript` in the same directory.
 3. For each match, parse the axis name from the filename segment between the first and last `.`.
-4. Update or create `FunscriptAxisInput` entries in-place in `app_state.inputs`; append new discovered entries.
+4. Update or create `FunscriptAxisInput` entries in-place in `app_state.inputs`; append new discovered entries with `enabled = False` so they do not drive outputs until the user explicitly enables them.
 5. Emit an `inputs_updated` signal.
 
 If a previously loaded file path changes, auto-discovered axis entries are re-validated for the new file.
@@ -1237,6 +1238,14 @@ on_missing_input = "force_off"
   retain = false
 ```
 
+```toml
+[data_logging]
+enabled = false
+interval_s = 1.0
+```
+
+When `enabled = true` the logger writes a wide-format CSV to `%APPDATA%\funscript-gateway\data_log\session_YYYYMMDD_HHMMSS.csv` at the configured interval. When omitted, the section defaults to `enabled = false` so existing config files are not affected.
+
 **Backwards compatibility:** Config files using old key names (`[[axes]]`, `axis_name`, `on_missing_axis`) are transparently upgraded on read. New saves always use the current key names.
 
 **Startup sequence:**
@@ -1387,7 +1396,7 @@ Field name validation: must match `^[A-Za-z_$][A-Za-z0-9_$]*$` (standard identif
 
 ### 8.6 Settings Tab
 
-Form-based settings for the player connection.
+Form-based settings for the player connection, funscript paths, and data logging.
 
 ```
 Player Settings
@@ -1403,6 +1412,12 @@ Funscript Paths
 Additional search paths:
   [ list widget with paths ]
   [+ Add path]  [- Remove]
+
+Data Logging
+────────────
+  [✓] Write CSV log of all inputs, outputs, and player state
+Sample interval: [1.0 s ▲▼]
+                 [Open log folder]
 
                             [Apply]  [Cancel]
 ```
@@ -1647,6 +1662,15 @@ class OutputConfig:
     ws: WsOutputConfig = field(default_factory=WsOutputConfig)
 ```
 
+### `DataLoggingConfig`
+
+```python
+@dataclass
+class DataLoggingConfig:
+    enabled: bool = False       # whether to write CSV session files
+    interval_s: float = 1.0    # sample interval in seconds (0.1–60)
+```
+
 ### `GatewayConfig`
 
 ```python
@@ -1656,6 +1680,7 @@ class GatewayConfig:
     funscript_search_paths: list[str] = field(default_factory=list)
     inputs: list = field(default_factory=list)   # list[AnyInput]; untyped to avoid forward-ref issues
     outputs: list[OutputConfig] = field(default_factory=list)
+    data_logging: DataLoggingConfig = field(default_factory=DataLoggingConfig)
 ```
 
 ### `AppState`
@@ -1942,6 +1967,7 @@ funscript-gateway/
 │       │   ├── __init__.py
 │       │   ├── manager.py           # OutputManager: evaluation loop
 │       │   ├── input_poller.py      # InputPoller: polls RestimInput, evaluates CalculatedInput
+│       │   ├── data_logger.py       # DataLogger: periodic CSV writer
 │       │   ├── threshold.py         # ThresholdSwitchProcessor
 │       │   ├── tasmota.py           # TasmotaDriver
 │       │   ├── mqtt.py              # MqttDriver
