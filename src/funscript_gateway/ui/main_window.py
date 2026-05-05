@@ -12,7 +12,7 @@ class MainWindow(QMainWindow):
     Closing the window hides it (minimises to tray) instead of quitting.
     """
 
-    def __init__(self, app_state, engine, output_manager, player_manager, parent=None) -> None:
+    def __init__(self, app_state, engine, output_manager, player_manager, data_logger, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("funscript-gateway")
         self.setMinimumSize(700, 450)
@@ -26,7 +26,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(StatusTab(app_state), "Status")
         tabs.addTab(InputsTab(app_state, engine), "Inputs")
         tabs.addTab(OutputsTab(app_state, output_manager), "Outputs")
-        tabs.addTab(SettingsTab(app_state, player_manager), "Settings")
+        tabs.addTab(SettingsTab(app_state, player_manager, data_logger), "Settings")
         self.setCentralWidget(tabs)
 
     def closeEvent(self, event: QEvent) -> None:

@@ -38,11 +38,12 @@ def setup_logging(debug: bool = False) -> None:
 logger = logging.getLogger(__name__)
 
 
-async def async_main(app_state, player_manager, engine, output_manager, input_poller) -> None:
+async def async_main(app_state, player_manager, engine, output_manager, input_poller, data_logger) -> None:
     """Start all async components and keep running until cancelled."""
     await player_manager.start()
     await output_manager.start()
     await input_poller.start()
+    await data_logger.start()
     try:
         # Run until QApplication quits (which cancels the event loop).
         while True:
@@ -51,6 +52,7 @@ async def async_main(app_state, player_manager, engine, output_manager, input_po
         pass
     finally:
         logger.info("Shutting down…")
+        await data_logger.stop()
         await input_poller.stop()
         await output_manager.stop()
         await player_manager.stop()
@@ -74,6 +76,7 @@ def main() -> None:
 
     from funscript_gateway.app_state import AppState
     from funscript_gateway.funscript.engine import FunscriptEngine
+    from funscript_gateway.outputs.data_logger import DataLogger
     from funscript_gateway.outputs.input_poller import InputPoller
     from funscript_gateway.outputs.manager import OutputManager
     from funscript_gateway.player.manager import PlayerConnectionManager
@@ -97,26 +100,23 @@ def main() -> None:
     engine = FunscriptEngine(app_state)
     output_manager = OutputManager(app_state, engine)
     input_poller = InputPoller(app_state)
+    data_logger = DataLogger(app_state)
 
     # Connect player state changes to the funscript engine.
     app_state.player_state_changed.connect(engine.on_player_state_changed)
 
     # Build UI.
-    window = MainWindow(app_state, engine, output_manager, player_manager)
+    window = MainWindow(app_state, engine, output_manager, player_manager, data_logger)
     tray = SystemTrayIcon(window, app_state)
     tray.show()
     window.show()
 
-    def on_quit() -> None:
-        for task in asyncio.all_tasks(loop):
-            task.cancel()
-
-    app.aboutToQuit.connect(on_quit)
-
     with loop:
-        loop.run_until_complete(
-            async_main(app_state, player_manager, engine, output_manager, input_poller)
+        main_task = asyncio.ensure_future(
+            async_main(app_state, player_manager, engine, output_manager, input_poller, data_logger)
         )
+        tray.quit_requested.connect(main_task.cancel)
+        loop.run_until_complete(main_task)
 
     logger.info("funscript-gateway exited.")
 

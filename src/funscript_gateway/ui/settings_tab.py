@@ -7,6 +7,7 @@ import logging
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -27,10 +28,11 @@ logger = logging.getLogger(__name__)
 
 
 class SettingsTab(QWidget):
-    def __init__(self, app_state, player_manager, parent=None) -> None:
+    def __init__(self, app_state, player_manager, data_logger=None, parent=None) -> None:
         super().__init__(parent)
         self._app_state = app_state
         self._player_manager = player_manager
+        self._data_logger = data_logger
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -93,6 +95,28 @@ class SettingsTab(QWidget):
 
         layout.addWidget(paths_group)
 
+        # Data logging group
+        logging_group = QGroupBox("Data Logging")
+        logging_form = QFormLayout(logging_group)
+
+        self._logging_check = QCheckBox("Write CSV log of all inputs, outputs, and player state")
+        logging_form.addRow("", self._logging_check)
+
+        self._log_interval_spin = QDoubleSpinBox()
+        self._log_interval_spin.setRange(0.1, 60.0)
+        self._log_interval_spin.setSingleStep(0.5)
+        self._log_interval_spin.setDecimals(1)
+        self._log_interval_spin.setSuffix(" s")
+        logging_form.addRow("Sample interval:", self._log_interval_spin)
+
+        self._logging_check.toggled.connect(self._log_interval_spin.setEnabled)
+
+        btn_open_log_dir = QPushButton("Open log folder")
+        btn_open_log_dir.clicked.connect(self._on_open_log_dir)
+        logging_form.addRow("", btn_open_log_dir)
+
+        layout.addWidget(logging_group)
+
         # Apply / Cancel buttons
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -133,6 +157,11 @@ class SettingsTab(QWidget):
         self._paths_list.clear()
         for p in self._app_state.config.funscript_search_paths:
             self._paths_list.addItem(p)
+
+        dl = self._app_state.config.data_logging
+        self._logging_check.setChecked(dl.enabled)
+        self._log_interval_spin.setValue(dl.interval_s)
+        self._log_interval_spin.setEnabled(dl.enabled)
 
     def _on_type_changed(self, player_type: str) -> None:
         # Save the host currently shown in the edit to whichever type we're switching from,
@@ -192,24 +221,44 @@ class SettingsTab(QWidget):
             paths.append(self._paths_list.item(i).text())
         self._app_state.config.funscript_search_paths = paths
 
+        dl = self._app_state.config.data_logging
+        old_logging_enabled = dl.enabled
+        old_logging_interval = dl.interval_s
+        dl.enabled = self._logging_check.isChecked()
+        dl.interval_s = self._log_interval_spin.value()
+
         try:
             save_config(self._app_state.config)
         except Exception as exc:
             logger.error("Failed to save config: %s", exc)
 
         # Restart player manager if connection settings changed.
+        import asyncio
         player_settings_changed = (
             cfg.type != old_type
             or cfg.host != old_host
             or cfg.port != old_port
         )
         if player_settings_changed and self._player_manager is not None:
-            import asyncio
             asyncio.ensure_future(self._restart_player())
+
+        # Restart data logger if its settings changed.
+        logging_settings_changed = (
+            dl.enabled != old_logging_enabled
+            or dl.interval_s != old_logging_interval
+        )
+        if logging_settings_changed and self._data_logger is not None:
+            asyncio.ensure_future(self._data_logger.restart())
 
     async def _restart_player(self) -> None:
         await self._player_manager.stop()
         await self._player_manager.start()
+
+    def _on_open_log_dir(self) -> None:
+        from funscript_gateway.outputs.data_logger import DATA_LOG_DIR
+        import os
+        DATA_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(DATA_LOG_DIR))  # noqa: S606
 
     def _on_cancel(self) -> None:
         self._load_from_config()

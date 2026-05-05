@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QPainter, QPixmap
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from funscript_gateway.models import MediaConnectionState, PlayerState
 
@@ -30,6 +30,8 @@ class SystemTrayIcon(QSystemTrayIcon):
     Icon state: green (playing) / grey (not playing).
     """
 
+    quit_requested = Signal()
+
     def __init__(self, main_window, app_state, parent=None) -> None:
         super().__init__(parent)
         self._main_window = main_window
@@ -52,7 +54,7 @@ class SystemTrayIcon(QSystemTrayIcon):
         menu.addAction(open_action)
         menu.addSeparator()
         quit_action = QAction("Quit", self)
-        quit_action.triggered.connect(QApplication.quit)
+        quit_action.triggered.connect(self.quit_requested)
         menu.addAction(quit_action)
         self.setContextMenu(menu)
 
