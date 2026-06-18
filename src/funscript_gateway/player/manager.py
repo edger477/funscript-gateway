@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from funscript_gateway.app_state import AppState
 from funscript_gateway.models import MediaConnectionState, PlayerState
@@ -11,6 +12,7 @@ from funscript_gateway.models import MediaConnectionState, PlayerState
 logger = logging.getLogger(__name__)
 
 _RETRY_DELAY_S = 5.0
+_STALE_TIMESTAMP_S = 5.0
 
 
 class PlayerConnectionManager:
@@ -24,6 +26,8 @@ class PlayerConnectionManager:
         self._app_state = app_state
         self._task: asyncio.Task | None = None
         self._running = False
+        self._last_time_ms: int | None = None
+        self._last_time_changed_at: float = 0.0
 
     async def start(self) -> None:
         self._running = True
@@ -39,7 +43,32 @@ class PlayerConnectionManager:
                 pass
             self._task = None
 
+    def _apply_stale_timestamp_detection(self, state: PlayerState) -> PlayerState:
+        """Override PLAYING→PAUSED when the timestamp has been frozen for too long."""
+        if state.connection_state != MediaConnectionState.CONNECTED_AND_PLAYING:
+            self._last_time_ms = None
+            self._last_time_changed_at = 0.0
+            return state
+
+        now = time.monotonic()
+        if state.current_time_ms != self._last_time_ms:
+            self._last_time_ms = state.current_time_ms
+            self._last_time_changed_at = now
+        elif now - self._last_time_changed_at >= _STALE_TIMESTAMP_S:
+            logger.debug(
+                "Timestamp frozen for %.1fs — treating as paused",
+                now - self._last_time_changed_at,
+            )
+            return PlayerState(
+                connection_state=MediaConnectionState.CONNECTED_AND_PAUSED,
+                file_path=state.file_path,
+                current_time_ms=state.current_time_ms,
+                playback_speed=state.playback_speed,
+            )
+        return state
+
     def _on_state_change(self, state: PlayerState) -> None:
+        state = self._apply_stale_timestamp_detection(state)
         self._app_state.player_state = state
         self._app_state.current_time_ms = state.current_time_ms
         self._app_state.player_state_changed.emit(state)
@@ -60,6 +89,10 @@ class PlayerConnectionManager:
                 )
             finally:
                 await backend.disconnect()
+
+            # Reset stale-timestamp tracking so the next connection starts fresh.
+            self._last_time_ms = None
+            self._last_time_changed_at = 0.0
 
             # Emit NOT_CONNECTED state so UI reflects the disconnection.
             disconnected = PlayerState(
