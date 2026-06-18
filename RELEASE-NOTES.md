@@ -2,6 +2,15 @@
 
 ---
 
+## v0.2.0
+
+### Bug fixes
+
+#### Frozen player detected as paused
+HereSphere (and any other player) can become frozen while still reporting a playing state — the player status shows connected and playing, but the playback position stops advancing. The gateway now monitors the timestamp on every state update; if the position has not moved for 5 seconds while the player claims to be playing, it is treated as paused. This prevents outputs from continuing to fire during a freeze.
+
+---
+
 ## v0.1.10
 
 ### New features
