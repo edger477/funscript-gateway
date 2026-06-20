@@ -19,6 +19,7 @@ from funscript_gateway.models import (
     HeartRateInput,
     RestimCondition,
     RestimInput,
+    RestimVolumeInput,
     TasmotaInput,
 )
 
@@ -92,6 +93,8 @@ def _eval_calculated(inp: CalculatedInput, value_map: dict[str, float]) -> float
 
     def _to_bool(entry) -> bool:
         v = value_map.get(entry.input_name, 0.0)
+        if entry.inverse:
+            v = 100.0 - v
         return v >= entry.threshold if entry.above else v < entry.threshold
 
     result = _to_bool(inp.entries[0])
@@ -108,16 +111,25 @@ def _eval_calculated(inp: CalculatedInput, value_map: dict[str, float]) -> float
 
 
 def _eval_arithmetic(inp: ArithmeticInput, value_map: dict[str, float]) -> float:
-    """Weighted average of input values, clamped to 0–100.
-
-    output = Σ(value_i × mult_i) / Σ(mult_i)
-    """
+    """Weighted average or product of input values, clamped to 0–100."""
     if not inp.entries:
         return 0.0
+
+    def _effective(e) -> float:
+        v = value_map.get(e.input_name, 0.0)
+        return 100.0 - v if e.inverse else v
+
+    if inp.operation == "multiply":
+        result = 1.0
+        for e in inp.entries:
+            result *= _effective(e) / 100.0
+        return max(0.0, min(100.0, result * 100.0))
+
+    # average (default)
     total_weight = sum(e.multiplier for e in inp.entries)
     if total_weight == 0:
         return 0.0
-    weighted_sum = sum(value_map.get(e.input_name, 0.0) * e.multiplier for e in inp.entries)
+    weighted_sum = sum(_effective(e) * e.multiplier for e in inp.entries)
     return max(0.0, min(100.0, weighted_sum / total_weight))
 
 
@@ -165,6 +177,11 @@ class InputPoller:
                     last = self._last_poll.get(inp.name, -1e9)
                     if now - last >= inp.poll_interval_s:
                         await self._poll_restim(inp)
+                        self._last_poll[inp.name] = now
+                elif isinstance(inp, RestimVolumeInput) and inp.enabled:
+                    last = self._last_poll.get(inp.name, -1e9)
+                    if now - last >= inp.poll_interval_s:
+                        await self._poll_restim_volume(inp)
                         self._last_poll[inp.name] = now
                 elif isinstance(inp, TasmotaInput) and inp.enabled:
                     last = self._last_poll.get(inp.name, -1e9)
@@ -231,6 +248,35 @@ class InputPoller:
             logger.debug("Restim poll '%s' failed: %s", inp.name, exc)
             inp.is_error = True
             inp.current_value = 100.0 if inp.default_value else 0.0
+
+    async def _poll_restim_volume(self, inp: RestimVolumeInput) -> None:
+        try:
+            data = await asyncio.to_thread(_fetch_json, inp.url)
+            volume = data.get("volume", {}) or {}
+            ui_vol = volume.get("ui")
+            device_vol = volume.get("device")
+
+            if inp.volume_source == "ui":
+                raw = float(ui_vol) if ui_vol is not None else None
+            elif inp.volume_source == "device":
+                raw = float(device_vol) if device_vol is not None else None
+            else:  # "multiply"
+                if ui_vol is not None and device_vol is not None:
+                    raw = float(ui_vol) * float(device_vol)
+                else:
+                    raw = None
+
+            if raw is None:
+                inp.is_error = True
+                inp.current_value = inp.default_value * 100.0
+            else:
+                inp.current_value = max(0.0, min(100.0, raw * 100.0))
+                inp.is_error = False
+            logger.debug("RestimVolume '%s': source=%s value=%.1f", inp.name, inp.volume_source, inp.current_value)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("RestimVolume poll '%s' failed: %s", inp.name, exc)
+            inp.is_error = True
+            inp.current_value = inp.default_value * 100.0
 
     def _as5311_inputs_for_url(self, url: str) -> list[As5311Input]:
         return [

@@ -27,6 +27,7 @@ from funscript_gateway.models import (
     FunscriptAxisInput,
     HeartRateInput,
     RestimInput,
+    RestimVolumeInput,
     TasmotaInput,
 )
 
@@ -43,6 +44,7 @@ _NUM_COLS = 6
 _TYPE_LABELS = {
     "funscript": "Funscript Axis",
     "restim": "Restim",
+    "restim_volume": "Restim Volume",
     "calculated": "Calculated (Logical)",
     "arithmetic": "Calculated (Arithmetic)",
     "as5311": "AS5311",
@@ -56,6 +58,8 @@ def _input_type_key(inp) -> str:
         return "funscript"
     if isinstance(inp, RestimInput):
         return "restim"
+    if isinstance(inp, RestimVolumeInput):
+        return "restim_volume"
     if isinstance(inp, CalculatedInput):
         return "calculated"
     if isinstance(inp, ArithmeticInput):
@@ -252,6 +256,20 @@ class InputsTab(QWidget):
                 status = QTableWidgetItem("OK")
             self._table.setItem(row, _COL_STATUS, status)
 
+        elif isinstance(inp, RestimVolumeInput):
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setValue(int(inp.current_value))
+            bar.setFormat(f"{inp.current_value:.1f}")
+            self._table.setCellWidget(row, _COL_VALUE, bar)
+
+            if inp.is_error:
+                status = QTableWidgetItem(f"Error (default {inp.default_value:.2f})")
+                status.setForeground(Qt.GlobalColor.darkRed)
+            else:
+                status = QTableWidgetItem(f"OK ({inp.volume_source})")
+            self._table.setItem(row, _COL_STATUS, status)
+
         elif isinstance(inp, CalculatedInput):
             bar = QProgressBar()
             bar.setRange(0, 100)
@@ -268,10 +286,14 @@ class InputsTab(QWidget):
             bar.setFormat(f"{inp.current_value:.1f}")
             self._table.setCellWidget(row, _COL_VALUE, bar)
             n = len(inp.entries)
-            total_w = sum(e.multiplier for e in inp.entries)
+            if inp.operation == "multiply":
+                status_txt = f"{n} entr{'y' if n == 1 else 'ies'}, ×"
+            else:
+                total_w = sum(e.multiplier for e in inp.entries)
+                status_txt = f"{n} entr{'y' if n == 1 else 'ies'}, ÷{total_w}"
             self._table.setItem(
                 row, _COL_STATUS,
-                QTableWidgetItem(f"{n} entr{'y' if n == 1 else 'ies'}, ÷{total_w}"),
+                QTableWidgetItem(status_txt),
             )
 
         elif isinstance(inp, As5311Input):
@@ -338,6 +360,8 @@ class InputsTab(QWidget):
                 bar.setFormat(f"{val:.1f}")
             elif isinstance(inp, ArithmeticInput):
                 bar.setFormat(f"{val:.1f}")
+            elif isinstance(inp, RestimVolumeInput):
+                bar.setFormat(f"{val:.1f}")
             elif isinstance(inp, As5311Input):
                 bar.setFormat(f"{inp.last_position_mm:.3f} mm")
             elif isinstance(inp, HeartRateInput):
@@ -355,6 +379,16 @@ class InputsTab(QWidget):
                         item.setForeground(Qt.GlobalColor.darkRed)
                     else:
                         item.setText("OK")
+                        item.setForeground(self._table.palette().text().color())
+
+            elif isinstance(inp, RestimVolumeInput):
+                item = self._table.item(row, _COL_STATUS)
+                if item:
+                    if inp.is_error:
+                        item.setText(f"Error (default {inp.default_value:.2f})")
+                        item.setForeground(Qt.GlobalColor.darkRed)
+                    else:
+                        item.setText(f"OK ({inp.volume_source})")
                         item.setForeground(self._table.palette().text().color())
 
             elif isinstance(inp, As5311Input):
@@ -402,6 +436,7 @@ class InputsTab(QWidget):
         menu = QMenu(self)
         menu.addAction("Funscript Axis", self._add_funscript_axis)
         menu.addAction("Restim", self._add_restim)
+        menu.addAction("Restim Volume", self._add_restim_volume)
         menu.addAction("AS5311 Sensor", self._add_as5311)
         menu.addAction("Tasmota", self._add_tasmota)
         menu.addAction("Heart Rate (BLE)", self._add_heart_rate)
@@ -425,6 +460,17 @@ class InputsTab(QWidget):
     def _add_restim(self) -> None:
         from funscript_gateway.ui.input_dialogs import RestimDialog
         dlg = RestimDialog(parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        inp = dlg.get_config()
+        if not inp.name:
+            QMessageBox.warning(self, "Invalid", "Input name cannot be empty.")
+            return
+        self._save_new_input(inp)
+
+    def _add_restim_volume(self) -> None:
+        from funscript_gateway.ui.input_dialogs import RestimVolumeDialog
+        dlg = RestimVolumeDialog(parent=self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         inp = dlg.get_config()
@@ -549,6 +595,14 @@ class InputsTab(QWidget):
         elif isinstance(inp, RestimInput):
             from funscript_gateway.ui.input_dialogs import RestimDialog
             dlg = RestimDialog(config=inp, parent=self)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            new_inp = dlg.get_config()
+            self._replace_input(row, inp, new_inp)
+
+        elif isinstance(inp, RestimVolumeInput):
+            from funscript_gateway.ui.input_dialogs import RestimVolumeDialog
+            dlg = RestimVolumeDialog(config=inp, parent=self)
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 return
             new_inp = dlg.get_config()

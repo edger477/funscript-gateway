@@ -45,6 +45,10 @@ class WsDriver:
         """Update the raw input value (0–100). Thread-safe from the eval loop."""
         self._input_value = max(0.0, min(100.0, input_value))
 
+    async def set_state(self, on: bool) -> None:
+        """Force output fully on (100) or off (0), used by disconnect/pause handlers."""
+        self.set_value(100.0 if on else 0.0)
+
     async def connect(self) -> None:
         self._running = True
         self._task = asyncio.ensure_future(self._ws_loop())

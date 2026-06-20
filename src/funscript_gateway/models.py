@@ -66,11 +66,26 @@ class RestimInput:
 
 
 @dataclass
+class RestimVolumeInput:
+    """Reads a volume value from the restim status endpoint (0–100 scaled from 0–1)."""
+    name: str
+    url: str = "http://localhost:12348/v1/status"
+    enabled: bool = True
+    poll_interval_s: float = 2.0
+    volume_source: Literal["device", "ui", "multiply"] = "ui"
+    default_value: float = 0.0  # 0.0–1.0; used when endpoint is unavailable
+    # Runtime fields (not persisted):
+    current_value: float = 0.0  # 0–100 scaled
+    is_error: bool = False
+
+
+@dataclass
 class CalculatedEntry:
     input_name: str
     operator: Literal["and", "or", "xor"] = "and"  # operator before this entry; ignored for first
     above: bool = True          # True: entry is ON when value >= threshold; False: when value < threshold
     threshold: float = 50.0    # 0–100 threshold for converting the input value to boolean
+    inverse: bool = False       # True: effective value = 100 - value before threshold comparison
 
 
 @dataclass
@@ -105,13 +120,15 @@ class As5311Input:
 @dataclass
 class ArithmeticEntry:
     input_name: str
-    multiplier: int = 1   # 1–4; output = Σ(value_i × mult_i) / Σ(mult_i)
+    multiplier: int = 1   # 1–4; used in average mode: output = Σ(value_i × mult_i) / Σ(mult_i)
+    inverse: bool = False  # True: effective value = 100 - value
 
 
 @dataclass
 class ArithmeticInput:
     name: str
     enabled: bool = True
+    operation: Literal["average", "multiply"] = "average"
     entries: list[ArithmeticEntry] = field(default_factory=list)
     # Runtime:
     current_value: float = 0.0
@@ -150,7 +167,7 @@ class HeartRateInput:
     is_error: bool = False
 
 
-AnyInput = Union[FunscriptAxisInput, RestimInput, CalculatedInput, As5311Input, ArithmeticInput, TasmotaInput, HeartRateInput]
+AnyInput = Union[FunscriptAxisInput, RestimInput, RestimVolumeInput, CalculatedInput, As5311Input, ArithmeticInput, TasmotaInput, HeartRateInput]
 
 
 PLAYER_DEFAULT_PORTS: dict[str, int] = {

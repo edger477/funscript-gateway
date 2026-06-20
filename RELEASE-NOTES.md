@@ -2,6 +2,59 @@
 
 ---
 
+## v0.3.0
+
+### New features
+
+#### Restim Volume input
+A new input type that reads the current volume from restim's HTTP status endpoint and maps it to a 0–100 value. Useful for driving outputs in proportion to restim's volume rather than its playing state.
+
+Three volume sources are available:
+
+| Source | Description |
+|--------|-------------|
+| `ui` | Application volume slider (always present) |
+| `device` | Hardware device volume (may be absent) |
+| `multiply` | `ui × device` — both must be present |
+
+A configurable fallback value is used when the endpoint is unreachable or the chosen source is absent. Poll interval is configurable separately from the Restim input.
+
+#### Calculated (Logical) — per-entry inversion
+Each entry in a Calculated (Logical) input now has an **inv** checkbox. When checked, the effective value used for threshold comparison becomes `100 − value` before applying the ≥/< test. This allows conditions like "input is mostly off" without needing a separate arithmetic step. The formula display in the dialog updates live to show the inversion.
+
+#### Calculated (Arithmetic) — multiply mode and per-entry inversion
+The Arithmetic input has two new capabilities:
+
+**Operation selector** (`average` / `multiply`):
+- `average` — existing weighted mean: `Σ(value × weight) ÷ Σ(weight)`
+- `multiply` — product mode: `(v₁/100) × (v₂/100) × … × 100`
+
+In multiply mode the weight spinner is disabled (weights don't apply). The formula display adapts to show the correct expression for the chosen operation.
+
+**Per-entry inversion**: each entry also gets an **inv** checkbox, making the effective value `100 − value` before it enters the calculation. Works in both average and multiply modes.
+
+#### Session correlation report
+A self-contained HTML tool (`src/funscript_gateway/report/correlation_report.html`) for exploring CSV log files produced by the data logger. Drop or open a session CSV to get:
+
+- **Full correlation matrix** — Pearson r heatmap across all numeric columns; click any cell to open a scatter plot with regression line and fit summary
+- **HR Focus** — horizontal bar chart of all correlations with the heart rate BPM column, sorted by strength, click for scatter
+- **Volume & Sensor Focus** — sub-matrix filtered to volume, AS5311, HR, restim, and pressure columns
+- **Time Series** — overlaid line chart with per-column toggles, optional 0–1 normalization, wall-clock or player-position X axis, and automatic subsampling for large files
+
+The file groups rows by `player_file` when multiple media files appear in a session, letting you filter the analysis to a specific file.
+
+No server required — open directly in any browser.
+
+### Bug fixes
+
+#### WebSocket output crash on player disconnect
+When a player disconnected, the disconnect handler called `set_state(bool)` on every output driver. `WsDriver` was missing this method, causing a `'WsDriver' object has no attribute 'set_state'` error logged for every WebSocket output. The handler now works correctly: `True` maps to full output (100) and `False` maps to off (0).
+
+#### App freeze when CSV logging is active
+The CSV data logger called `writer.writerow()` and `fh.flush()` directly on the asyncio event loop thread. On a slow or briefly busy disk (spinning drive, antivirus scan, network path) these blocking calls stalled the entire event loop, freezing the UI. The write and flush are now executed in a thread pool worker via `run_in_executor` so disk latency cannot block the UI.
+
+---
+
 ## v0.2.0
 
 ### Bug fixes

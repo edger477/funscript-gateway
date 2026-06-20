@@ -33,6 +33,7 @@ from funscript_gateway.models import (
     HeartRateInput,
     RestimCondition,
     RestimInput,
+    RestimVolumeInput,
     TasmotaInput,
 )
 
@@ -223,6 +224,79 @@ class RestimDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+# Restim Volume dialog
+# ---------------------------------------------------------------------------
+
+class RestimVolumeDialog(QDialog):
+    """Dialog for creating/editing a RestimVolumeInput."""
+
+    def __init__(self, config: RestimVolumeInput | None = None, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Restim Volume Input")
+        self.setMinimumWidth(400)
+
+        cfg = config or RestimVolumeInput(name="")
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self._name_edit = QLineEdit(cfg.name)
+        form.addRow("Name:", self._name_edit)
+
+        self._url_edit = QLineEdit(cfg.url)
+        form.addRow("Endpoint URL:", self._url_edit)
+
+        self._poll_spin = QDoubleSpinBox()
+        self._poll_spin.setRange(0.1, 60.0)
+        self._poll_spin.setDecimals(1)
+        self._poll_spin.setSuffix(" s")
+        self._poll_spin.setValue(cfg.poll_interval_s)
+        form.addRow("Poll interval:", self._poll_spin)
+
+        self._source_combo = QComboBox()
+        self._source_combo.addItems(["ui", "device", "multiply"])
+        self._source_combo.setCurrentText(cfg.volume_source)
+        self._source_combo.setToolTip(
+            "Which volume value to use:\n"
+            "  ui — application volume slider (always present)\n"
+            "  device — hardware device volume (may be absent)\n"
+            "  multiply — ui × device (both must be present)"
+        )
+        form.addRow("Volume source:", self._source_combo)
+
+        self._default_spin = QDoubleSpinBox()
+        self._default_spin.setRange(0.0, 1.0)
+        self._default_spin.setDecimals(3)
+        self._default_spin.setSingleStep(0.05)
+        self._default_spin.setValue(cfg.default_value)
+        self._default_spin.setToolTip("Value (0–1) used when the endpoint is unreachable or the chosen source is absent.")
+        form.addRow("Default (0–1):", self._default_spin)
+
+        self._enabled_check = QCheckBox()
+        self._enabled_check.setChecked(cfg.enabled)
+        form.addRow("Enabled:", self._enabled_check)
+
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_config(self) -> RestimVolumeInput:
+        return RestimVolumeInput(
+            name=self._name_edit.text().strip(),
+            url=self._url_edit.text().strip(),
+            enabled=self._enabled_check.isChecked(),
+            poll_interval_s=self._poll_spin.value(),
+            volume_source=self._source_combo.currentText(),
+            default_value=self._default_spin.value(),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Calculated dialog
 # ---------------------------------------------------------------------------
 
@@ -272,12 +346,12 @@ class CalculatedDialog(QDialog):
         self._rows: list[tuple] = []
 
         for entry in cfg.entries:
-            self._add_row(entry.input_name, entry.operator, entry.above, entry.threshold)
+            self._add_row(entry.input_name, entry.operator, entry.above, entry.threshold, entry.inverse)
         if not self._rows:
-            self._add_row("", "and", True, 50.0)
+            self._add_row("", "and", True, 50.0, False)
 
         add_btn = QPushButton("Add Entry")
-        add_btn.clicked.connect(lambda: self._add_row("", "and", True, 50.0))
+        add_btn.clicked.connect(lambda: self._add_row("", "and", True, 50.0, False))
         layout.addWidget(add_btn)
 
         buttons = QDialogButtonBox(
@@ -289,7 +363,7 @@ class CalculatedDialog(QDialog):
 
         self._update_formula()
 
-    def _add_row(self, input_name: str, operator: str, above: bool, threshold: float) -> None:
+    def _add_row(self, input_name: str, operator: str, above: bool, threshold: float, inverse: bool) -> None:
         row_widget = QWidget()
         row_h = QHBoxLayout(row_widget)
         row_h.setContentsMargins(0, 0, 0, 0)
@@ -309,6 +383,12 @@ class CalculatedDialog(QDialog):
             spacer = QLabel("      ")
             spacer.setFixedWidth(112)
             row_h.addWidget(spacer)
+
+        inv_check = QCheckBox("inv")
+        inv_check.setChecked(inverse)
+        inv_check.setToolTip("Invert: use (100 − value) before threshold comparison")
+        inv_check.stateChanged.connect(self._update_formula)
+        row_h.addWidget(inv_check)
 
         inp_combo = QComboBox()
         inp_combo.addItems(self._available)
@@ -340,7 +420,7 @@ class CalculatedDialog(QDialog):
         row_h.addWidget(remove_btn)
 
         self._entries_layout.addWidget(row_widget)
-        self._rows.append((row_widget, op_combo, inp_combo, dir_combo, thresh_spin))
+        self._rows.append((row_widget, op_combo, inv_check, inp_combo, dir_combo, thresh_spin))
         self._update_formula()
 
     def _remove_row(self, row_widget: QWidget) -> None:
@@ -351,7 +431,7 @@ class CalculatedDialog(QDialog):
                 break
         # If first row was removed, replace its operator combo with a spacer
         if self._rows:
-            new_first_widget, old_op, inp, dir_combo, thresh_spin = self._rows[0]
+            new_first_widget, old_op, inv_check, inp, dir_combo, thresh_spin = self._rows[0]
             if old_op is not None:
                 lyt = new_first_widget.layout()
                 lyt.removeWidget(old_op)
@@ -359,17 +439,17 @@ class CalculatedDialog(QDialog):
                 spacer = QLabel("      ")
                 spacer.setFixedWidth(56)
                 lyt.insertWidget(0, spacer)
-                self._rows[0] = (new_first_widget, None, inp, dir_combo, thresh_spin)
+                self._rows[0] = (new_first_widget, None, inv_check, inp, dir_combo, thresh_spin)
         self._update_formula()
 
     def _update_formula(self) -> None:
         if not self._rows:
             self._formula_label.setText("Formula: (empty)")
             return
-        parts = [
-            f"{inp.currentText()} {d.currentText()} {t.value():.1f}"
-            for _, _, inp, d, t in self._rows
-        ]
+        parts = []
+        for _, _, inv, inp, d, t in self._rows:
+            name = f"(100\u2212{inp.currentText()})" if inv.isChecked() else inp.currentText()
+            parts.append(f"{name} {d.currentText()} {t.value():.1f}")
         ops = [op.currentText() if op else "" for _, op, *_ in self._rows]
         formula = parts[0]
         for i in range(1, len(parts)):
@@ -383,8 +463,9 @@ class CalculatedDialog(QDialog):
                 operator=op_combo.currentText() if op_combo else "and",
                 above=(dir_combo.currentText() == "\u2265"),
                 threshold=thresh_spin.value(),
+                inverse=inv_check.isChecked(),
             )
-            for _, op_combo, inp_combo, dir_combo, thresh_spin in self._rows
+            for _, op_combo, inv_check, inp_combo, dir_combo, thresh_spin in self._rows
         ]
         return CalculatedInput(
             name=self._name_edit.text().strip(),
@@ -421,6 +502,17 @@ class ArithmeticDialog(QDialog):
         self._enabled_check = QCheckBox()
         self._enabled_check.setChecked(cfg.enabled)
         top_form.addRow("Enabled:", self._enabled_check)
+
+        self._operation_combo = QComboBox()
+        self._operation_combo.addItems(["average", "multiply"])
+        self._operation_combo.setCurrentText(cfg.operation)
+        self._operation_combo.setToolTip(
+            "average — weighted mean: Σ(value × weight) ÷ Σ(weight)\n"
+            "multiply — product: (v1/100) × (v2/100) × … × 100"
+        )
+        self._operation_combo.currentTextChanged.connect(self._on_operation_changed)
+        top_form.addRow("Operation:", self._operation_combo)
+
         layout.addLayout(top_form)
 
         self._formula_label = QLabel()
@@ -434,16 +526,16 @@ class ArithmeticDialog(QDialog):
         self._entries_layout.setSpacing(4)
         layout.addWidget(self._entries_widget)
 
-        # _rows: list of (row_widget, inp_combo, mult_combo)
+        # _rows: list of (row_widget, inp_combo, inv_check, mult_combo)
         self._rows: list[tuple] = []
 
         for entry in cfg.entries:
-            self._add_row(entry.input_name, entry.multiplier)
+            self._add_row(entry.input_name, entry.multiplier, entry.inverse)
         if not self._rows:
-            self._add_row("", 1)
+            self._add_row("", 1, False)
 
         add_btn = QPushButton("Add Entry")
-        add_btn.clicked.connect(lambda: self._add_row("", 1))
+        add_btn.clicked.connect(lambda: self._add_row("", 1, False))
         layout.addWidget(add_btn)
 
         buttons = QDialogButtonBox(
@@ -455,11 +547,23 @@ class ArithmeticDialog(QDialog):
 
         self._update_formula()
 
-    def _add_row(self, input_name: str, multiplier: int) -> None:
+    def _on_operation_changed(self, op: str) -> None:
+        is_avg = (op == "average")
+        for _, inp_combo, inv_check, mult_combo in self._rows:
+            mult_combo.setEnabled(is_avg)
+        self._update_formula()
+
+    def _add_row(self, input_name: str, multiplier: int, inverse: bool) -> None:
         row_widget = QWidget()
         h = QHBoxLayout(row_widget)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(4)
+
+        inv_check = QCheckBox("inv")
+        inv_check.setChecked(inverse)
+        inv_check.setToolTip("Invert: use (100 − value) in calculation")
+        inv_check.stateChanged.connect(self._update_formula)
+        h.addWidget(inv_check)
 
         inp_combo = QComboBox()
         inp_combo.addItems(self._available)
@@ -476,6 +580,7 @@ class ArithmeticDialog(QDialog):
         mult_combo.addItems(["1", "2", "3", "4"])
         mult_combo.setCurrentText(str(multiplier))
         mult_combo.setFixedWidth(60)
+        mult_combo.setEnabled(self._operation_combo.currentText() == "average")
         mult_combo.currentTextChanged.connect(self._update_formula)
         h.addWidget(mult_combo)
 
@@ -485,7 +590,7 @@ class ArithmeticDialog(QDialog):
         h.addWidget(remove_btn)
 
         self._entries_layout.addWidget(row_widget)
-        self._rows.append((row_widget, inp_combo, mult_combo))
+        self._rows.append((row_widget, inp_combo, inv_check, mult_combo))
         self._update_formula()
 
     def _remove_row(self, row_widget: QWidget) -> None:
@@ -500,29 +605,41 @@ class ArithmeticDialog(QDialog):
         if not self._rows:
             self._formula_label.setText("Formula: (empty)")
             return
+        op = self._operation_combo.currentText()
         parts = []
         total_weight = 0
-        for _, inp, mult in self._rows:
-            m = int(mult.currentText())
-            total_weight += m
+        for _, inp, inv, mult in self._rows:
             name = inp.currentText() or "?"
-            parts.append(f"{name} \u00d7 {m}" if m > 1 else name)
-        inner = " + ".join(parts)
-        if len(self._rows) > 1:
-            inner = f"({inner})"
-        self._formula_label.setText(f"Formula: {inner} \u00f7 {total_weight}")
+            if inv.isChecked():
+                name = f"(100\u2212{name})"
+            if op == "average":
+                m = int(mult.currentText())
+                total_weight += m
+                parts.append(f"{name} \u00d7 {m}" if m > 1 else name)
+            else:
+                parts.append(f"{name}/100")
+        if op == "average":
+            inner = " + ".join(parts)
+            if len(self._rows) > 1:
+                inner = f"({inner})"
+            self._formula_label.setText(f"Formula: {inner} \u00f7 {total_weight}")
+        else:
+            inner = " \u00d7 ".join(parts)
+            self._formula_label.setText(f"Formula: ({inner}) \u00d7 100")
 
     def get_config(self) -> ArithmeticInput:
         entries = [
             ArithmeticEntry(
                 input_name=inp_combo.currentText(),
                 multiplier=int(mult_combo.currentText()),
+                inverse=inv_check.isChecked(),
             )
-            for _, inp_combo, mult_combo in self._rows
+            for _, inp_combo, inv_check, mult_combo in self._rows
         ]
         return ArithmeticInput(
             name=self._name_edit.text().strip(),
             enabled=self._enabled_check.isChecked(),
+            operation=self._operation_combo.currentText(),
             entries=entries,
         )
 

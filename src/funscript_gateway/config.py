@@ -32,6 +32,7 @@ from funscript_gateway.models import (
     PlayerConfig,
     RestimCondition,
     RestimInput,
+    RestimVolumeInput,
     TasmotaInput,
     TasmotaOutputConfig,
     ThresholdSwitchConfig,
@@ -78,6 +79,17 @@ def _restim_input_from_dict(d: dict) -> RestimInput:
     )
 
 
+def _restim_volume_input_from_dict(d: dict) -> RestimVolumeInput:
+    return RestimVolumeInput(
+        name=d.get("name", ""),
+        url=d.get("url", "http://localhost:12348/v1/status"),
+        enabled=bool(d.get("enabled", True)),
+        poll_interval_s=float(d.get("poll_interval_s", 2.0)),
+        volume_source=d.get("volume_source", "ui"),
+        default_value=float(d.get("default_value", 0.0)),
+    )
+
+
 def _calculated_input_from_dict(d: dict) -> CalculatedInput:
     entries = [
         CalculatedEntry(
@@ -85,6 +97,7 @@ def _calculated_input_from_dict(d: dict) -> CalculatedInput:
             operator=e.get("operator", "and"),
             above=bool(e.get("above", True)),
             threshold=float(e.get("threshold", 50.0)),
+            inverse=bool(e.get("inverse", False)),
         )
         for e in d.get("entries", [])
     ]
@@ -132,12 +145,14 @@ def _arithmetic_input_from_dict(d: dict) -> ArithmeticInput:
         ArithmeticEntry(
             input_name=e.get("input_name", ""),
             multiplier=int(e.get("multiplier", 1)),
+            inverse=bool(e.get("inverse", False)),
         )
         for e in d.get("entries", [])
     ]
     return ArithmeticInput(
         name=d.get("name", ""),
         enabled=bool(d.get("enabled", True)),
+        operation=d.get("operation", "average"),
         entries=entries,
     )
 
@@ -146,6 +161,8 @@ def _input_from_dict(d: dict):
     input_type = d.get("type", "funscript_axis")
     if input_type == "restim":
         return _restim_input_from_dict(d)
+    if input_type == "restim_volume":
+        return _restim_volume_input_from_dict(d)
     if input_type == "calculated":
         return _calculated_input_from_dict(d)
     if input_type == "as5311":
@@ -321,6 +338,16 @@ def _input_to_dict(inp) -> dict:
                 "volume_device_threshold": inp.condition.volume_device_threshold,
             },
         }
+    if isinstance(inp, RestimVolumeInput):
+        return {
+            "type": "restim_volume",
+            "name": inp.name,
+            "url": inp.url,
+            "enabled": inp.enabled,
+            "poll_interval_s": inp.poll_interval_s,
+            "volume_source": inp.volume_source,
+            "default_value": inp.default_value,
+        }
     if isinstance(inp, CalculatedInput):
         return {
             "type": "calculated",
@@ -332,6 +359,7 @@ def _input_to_dict(inp) -> dict:
                     "operator": e.operator,
                     "above": e.above,
                     "threshold": e.threshold,
+                    "inverse": e.inverse,
                 }
                 for e in inp.entries
             ],
@@ -350,8 +378,9 @@ def _input_to_dict(inp) -> dict:
             "type": "arithmetic",
             "name": inp.name,
             "enabled": inp.enabled,
+            "operation": inp.operation,
             "entries": [
-                {"input_name": e.input_name, "multiplier": e.multiplier}
+                {"input_name": e.input_name, "multiplier": e.multiplier, "inverse": e.inverse}
                 for e in inp.entries
             ],
         }
