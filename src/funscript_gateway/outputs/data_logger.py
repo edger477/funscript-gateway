@@ -72,8 +72,7 @@ class DataLogger:
                 while self._running:
                     t0 = loop.time()
                     row = self._build_row(fixed_inputs, fixed_output_configs)
-                    writer.writerow(row)
-                    fh.flush()
+                    await loop.run_in_executor(None, self._write_row, writer, fh, row)
                     elapsed = loop.time() - t0
                     await asyncio.sleep(max(0.0, cfg.interval_s - elapsed))
         except asyncio.CancelledError:
@@ -82,6 +81,11 @@ class DataLogger:
             logger.error("Data logger error: %s", exc)
 
         logger.info("Data logging stopped: %s", file_path)
+
+    @staticmethod
+    def _write_row(writer: csv.writer, fh, row: list) -> None:
+        writer.writerow(row)
+        fh.flush()
 
     @staticmethod
     def _build_header(inputs: list, output_configs: list) -> list[str]:

@@ -1,0 +1,1264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Session Correlation Report</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #111827;
+  color: #f3f4f6;
+  min-height: 100vh;
+}
+
+/* ---- Upload screen ---- */
+#upload-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 2rem;
+}
+#upload-screen h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #f9fafb;
+  margin-bottom: 0.4rem;
+  letter-spacing: -0.02em;
+}
+.subtitle { color: #6b7280; font-size: 0.95rem; margin-bottom: 2.5rem; text-align: center; }
+.drop-zone {
+  border: 2px dashed #374151;
+  border-radius: 14px;
+  padding: 3rem 4rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  background: #1f2937;
+  max-width: 480px;
+  width: 100%;
+}
+.drop-zone:hover, .drop-zone.drag-over { border-color: #6366f1; background: #1e1b4b; }
+.drop-icon { font-size: 2.8rem; margin-bottom: 0.75rem; }
+.drop-zone p { color: #d1d5db; font-size: 1rem; margin-bottom: 0.4rem; }
+.drop-zone .hint { color: #6b7280; font-size: 0.82rem; }
+#file-input { display: none; }
+
+/* ---- Loading overlay ---- */
+#loading {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(17,24,39,0.88);
+  z-index: 300;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 1rem;
+}
+#loading.show { display: flex; }
+.spinner {
+  width: 42px; height: 42px;
+  border: 3px solid #374151;
+  border-top-color: #818cf8;
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+#loading-msg { color: #9ca3af; font-size: 0.9rem; }
+
+/* ---- Report screen ---- */
+#report-screen { display: none; padding: 1.5rem 2rem 4rem; max-width: 1500px; margin: 0 auto; }
+.report-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+.report-header h1 {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #f9fafb;
+  margin-bottom: 0.5rem;
+  letter-spacing: -0.01em;
+  word-break: break-all;
+}
+.pills { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.pill {
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 20px;
+  padding: 0.25rem 0.7rem;
+  font-size: 0.78rem;
+  color: #9ca3af;
+  white-space: nowrap;
+}
+.pill span { color: #e5e7eb; font-weight: 600; }
+.reload-btn {
+  background: #1f2937;
+  border: 1px solid #4b5563;
+  color: #d1d5db;
+  padding: 0.45rem 1.1rem;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  transition: background 0.2s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.reload-btn:hover { background: #374151; }
+
+/* ---- File selector bar ---- */
+#file-bar {
+  display: none;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+  background: #161f2e;
+  border: 1px solid #2d3a4f;
+  border-radius: 10px;
+  padding: 0.6rem 1.1rem;
+  margin-bottom: 1rem;
+}
+.file-bar-label { font-size: 0.8rem; font-weight: 600; color: #9ca3af; white-space: nowrap; }
+.file-select {
+  flex: 1;
+  min-width: 220px;
+  max-width: 520px;
+  background: #1f2937;
+  border: 1px solid #374151;
+  color: #e5e7eb;
+  font-size: 0.82rem;
+  padding: 0.32rem 2.2rem 0.32rem 0.75rem;
+  border-radius: 7px;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath fill='%236b7280' d='M5 7L0 2h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.65rem center;
+  transition: border-color 0.2s;
+}
+.file-select:hover { border-color: #6366f1; }
+.file-select:focus { outline: none; border-color: #818cf8; }
+.file-select option { background: #1f2937; }
+.file-stat { font-size: 0.77rem; color: #6b7280; white-space: nowrap; }
+.file-stat strong { color: #a5b4fc; font-weight: 600; }
+.state-pill {
+  display: inline-block;
+  background: #374151;
+  border-radius: 10px;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.7rem;
+  color: #9ca3af;
+  margin-left: 0.35rem;
+}
+
+/* ---- Column picker ---- */
+#col-picker {
+  background: #161f2e;
+  border: 1px solid #2d3a4f;
+  border-radius: 10px;
+  margin-bottom: 1.25rem;
+  overflow: hidden;
+}
+#col-picker-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1.1rem;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+#col-picker-toggle:hover { background: #1a2640; }
+.picker-title { font-size: 0.8rem; font-weight: 600; color: #9ca3af; white-space: nowrap; }
+#col-count-badge {
+  background: #2d3a4f;
+  border-radius: 12px;
+  padding: 0.15rem 0.65rem;
+  font-size: 0.73rem;
+  color: #9ca3af;
+  flex: 1;
+}
+#col-count-badge.partial { color: #fbbf24; }
+#col-count-badge.full    { color: #6ee7b7; }
+.picker-action-btn {
+  background: #2d3a4f;
+  border: 1px solid #3d4f67;
+  color: #d1d5db;
+  font-size: 0.72rem;
+  padding: 0.18rem 0.55rem;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+.picker-action-btn:hover { background: #374151; }
+.picker-arrow { color: #6b7280; font-size: 0.65rem; transition: transform 0.2s; display: inline-block; }
+.picker-arrow.open { transform: rotate(180deg); }
+#col-picker-body { display: none; padding: 0.85rem 1.1rem 1.1rem; border-top: 1px solid #2d3a4f; }
+#col-picker-body.open { display: block; }
+.col-groups { display: flex; flex-wrap: wrap; gap: 1rem 2.25rem; }
+.col-group { min-width: 160px; }
+.col-group-hdr {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #a5b4fc;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  user-select: none;
+}
+.col-group-hdr input[type=checkbox] { cursor: pointer; accent-color: #818cf8; }
+.col-item { display: flex; align-items: center; gap: 0.4rem; padding: 0.1rem 0; font-size: 0.76rem; color: #cbd5e1; }
+.col-item input[type=checkbox] { cursor: pointer; accent-color: #818cf8; flex-shrink: 0; }
+.col-item label { cursor: pointer; word-break: break-all; line-height: 1.35; }
+.col-item.off label { color: #4b5563; text-decoration: line-through; }
+
+/* ---- Tabs ---- */
+.tabs { display: flex; border-bottom: 1px solid #374151; margin-bottom: 2rem; }
+.tab-btn {
+  padding: 0.7rem 1.4rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #6b7280;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: color 0.2s, border-color 0.2s;
+  margin-bottom: -1px;
+  white-space: nowrap;
+}
+.tab-btn:hover { color: #d1d5db; }
+.tab-btn.active { color: #818cf8; border-bottom-color: #818cf8; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* ---- Section headings ---- */
+.section-title { font-size: 1.05rem; font-weight: 600; color: #e5e7eb; margin-bottom: 0.35rem; }
+.section-desc { color: #6b7280; font-size: 0.82rem; margin-bottom: 1.5rem; line-height: 1.5; }
+.section-desc strong { color: #a5b4fc; }
+
+/* ---- Heatmap ---- */
+.heatmap-scroll { overflow: auto; max-width: 100%; }
+table.heatmap { border-collapse: collapse; font-size: 0.68rem; }
+table.heatmap th.corner { background: #111827; }
+table.heatmap th.col-lbl {
+  background: #111827;
+  color: #9ca3af;
+  font-weight: 500;
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  height: 110px;
+  vertical-align: bottom;
+  text-align: left;
+  padding: 4px 6px;
+}
+table.heatmap td.row-lbl {
+  background: #111827;
+  color: #9ca3af;
+  white-space: nowrap;
+  padding: 2px 10px 2px 4px;
+  font-weight: 500;
+  text-align: right;
+  font-size: 0.7rem;
+}
+table.heatmap td.cell {
+  width: 46px; height: 46px;
+  text-align: center; vertical-align: middle;
+  font-weight: 700; font-size: 0.63rem;
+  border: 1px solid rgba(0,0,0,0.12);
+  cursor: pointer;
+  user-select: none;
+}
+table.heatmap td.cell:hover { outline: 2px solid #818cf8; outline-offset: -2px; z-index: 1; position: relative; }
+table.heatmap td.cell.diag { cursor: default; }
+table.heatmap td.cell.diag:hover { outline: none; }
+
+/* ---- Legend ---- */
+.legend { display: flex; align-items: center; gap: 0.6rem; margin-top: 1.25rem; font-size: 0.75rem; color: #6b7280; }
+.legend-bar {
+  width: 180px; height: 12px; border-radius: 3px;
+  background: linear-gradient(to right, rgb(50,50,220), rgb(255,255,255), rgb(220,50,50));
+  border: 1px solid #374151;
+}
+
+/* ---- Chart card ---- */
+.chart-card {
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.5rem;
+}
+.chart-note { font-size: 0.75rem; color: #6b7280; margin-top: 0.75rem; }
+.chart-note span { color: #818cf8; }
+
+/* ---- Time series ---- */
+.ts-controls { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-start; margin-bottom: 1.25rem; }
+.ts-chip-panel {
+  background: #161f2e;
+  border: 1px solid #2d3a4f;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  flex: 1;
+  min-width: 280px;
+}
+.ts-panel-title {
+  font-size: 0.72rem; font-weight: 700; color: #6b7280;
+  text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.55rem;
+}
+.ts-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.ts-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: #1f2937;
+  border: 1px solid #374151;
+  border-radius: 12px;
+  padding: 0.18rem 0.6rem;
+  font-size: 0.72rem;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.15s;
+  user-select: none;
+}
+.ts-chip:hover { border-color: #6366f1; color: #d1d5db; }
+.ts-chip.active { color: var(--c); border-color: var(--c); background: color-mix(in srgb, var(--c) 15%, transparent); }
+.chip-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c); flex-shrink: 0; }
+.ts-options {
+  background: #161f2e;
+  border: 1px solid #2d3a4f;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.ts-toggle { display: flex; align-items: center; gap: 0.45rem; font-size: 0.8rem; color: #d1d5db; cursor: pointer; user-select: none; }
+.ts-toggle input[type=checkbox] { accent-color: #818cf8; cursor: pointer; }
+.ts-xsel {
+  background: #1f2937; border: 1px solid #374151; color: #e5e7eb;
+  font-size: 0.78rem; padding: 0.28rem 0.55rem; border-radius: 6px;
+  cursor: pointer; width: 100%; margin-top: 0.2rem;
+}
+
+/* ---- Scatter modal ---- */
+.modal-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.72); z-index: 200;
+  align-items: center; justify-content: center; padding: 1rem;
+}
+.modal-overlay.open { display: flex; }
+.modal-box {
+  background: #1f2937; border: 1px solid #374151; border-radius: 12px;
+  padding: 1.5rem; max-width: 740px; width: 100%; position: relative;
+  box-shadow: 0 25px 60px rgba(0,0,0,0.5);
+}
+.modal-box h3 { font-size: 0.95rem; font-weight: 600; color: #f3f4f6; margin-bottom: 0.2rem; padding-right: 2rem; }
+.modal-meta { color: #6b7280; font-size: 0.78rem; margin-bottom: 1rem; line-height: 1.6; }
+.modal-meta strong { color: #a5b4fc; }
+.modal-close {
+  position: absolute; top: 1rem; right: 1rem;
+  background: none; border: none; color: #6b7280;
+  font-size: 1.4rem; cursor: pointer; line-height: 1; transition: color 0.15s;
+}
+.modal-close:hover { color: #f3f4f6; }
+.scatter-wrapper { position: relative; height: 370px; }
+
+/* ---- Error banner ---- */
+.error-banner {
+  background: #450a0a; border: 1px solid #7f1d1d; border-radius: 8px;
+  padding: 0.75rem 1rem; color: #fca5a5; font-size: 0.85rem;
+  margin-bottom: 1rem; display: none;
+}
+</style>
+</head>
+<body>
+
+<!-- Loading -->
+<div id="loading">
+  <div class="spinner"></div>
+  <div id="loading-msg">Computing correlations…</div>
+</div>
+
+<!-- Upload screen -->
+<div id="upload-screen">
+  <h1>📊 Correlation Report</h1>
+  <p class="subtitle">Drop any session CSV to explore correlations between its numeric columns</p>
+  <div class="drop-zone" id="drop-zone">
+    <div class="drop-icon">📂</div>
+    <p>Drag &amp; drop your CSV here</p>
+    <p class="hint">or click to browse — any session in this format works</p>
+  </div>
+  <input type="file" id="file-input" accept=".csv">
+  <div class="error-banner" id="error-banner"></div>
+</div>
+
+<!-- Report screen -->
+<div id="report-screen">
+  <div class="report-header">
+    <div>
+      <h1 id="report-title"></h1>
+      <div class="pills" id="pills"></div>
+    </div>
+    <button class="reload-btn" id="reload-btn">↩ Load another CSV</button>
+  </div>
+
+  <!-- File selector -->
+  <div id="file-bar">
+    <span class="file-bar-label">🎬 Group by file:</span>
+    <select class="file-select" id="file-select"></select>
+    <span class="file-stat" id="file-stat"></span>
+  </div>
+
+  <!-- Column picker -->
+  <div id="col-picker">
+    <div id="col-picker-toggle">
+      <span class="picker-title">⚙ Column Filter</span>
+      <span id="col-count-badge"></span>
+      <button class="picker-action-btn" id="select-all-btn">Select all</button>
+      <button class="picker-action-btn" id="deselect-all-btn">Deselect all</button>
+      <span id="picker-arrow" class="picker-arrow">▼</span>
+    </div>
+    <div id="col-picker-body"><!-- populated by JS --></div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="matrix">Full Correlation Matrix</button>
+    <button class="tab-btn" data-tab="hr">HR Focus</button>
+    <button class="tab-btn" data-tab="volume">Volume &amp; Sensor Focus</button>
+    <button class="tab-btn" data-tab="timeseries">Time Series</button>
+  </div>
+
+  <!-- Tab: Full Matrix -->
+  <div id="tab-matrix" class="tab-panel active">
+    <p class="section-title">Full Correlation Matrix</p>
+    <p class="section-desc">Pearson r between all selected numeric columns. <strong>Click any cell</strong> to open a scatter plot with regression line.</p>
+    <div class="heatmap-scroll" id="matrix-container"></div>
+    <div class="legend">
+      <span>−1</span><div class="legend-bar"></div><span>+1</span>
+      <span style="margin-left:0.75rem;">Hover for names · Click for scatter</span>
+    </div>
+  </div>
+
+  <!-- Tab: HR Focus -->
+  <div id="tab-hr" class="tab-panel">
+    <p class="section-title">Heart Rate Correlations</p>
+    <p class="section-desc">Pearson r between <strong>HR-sensor_bpm</strong> and every other selected column, sorted by strength. <strong>Click a bar</strong> to open a scatter plot.</p>
+    <div class="chart-card">
+      <div id="hr-chart-wrap" style="position:relative;"></div>
+      <p class="chart-note">Right = positive correlation · Left = negative · <span>Click a bar</span> for scatter</p>
+    </div>
+  </div>
+
+  <!-- Tab: Volume Focus -->
+  <div id="tab-volume" class="tab-panel">
+    <p class="section-title">Volume &amp; Sensor Focus</p>
+    <p class="section-desc">Correlation sub-matrix for <strong>volume</strong>, <strong>as5311</strong>, <strong>HR</strong>, and <strong>restim/pressure</strong> columns. Click any cell for scatter.</p>
+    <div class="heatmap-scroll" id="volume-container"></div>
+    <div class="legend">
+      <span>−1</span><div class="legend-bar"></div><span>+1</span>
+    </div>
+  </div>
+
+  <!-- Tab: Time Series -->
+  <div id="tab-timeseries" class="tab-panel">
+    <p class="section-title">Time Series</p>
+    <p class="section-desc">All series plotted against session time. <strong>Click a chip</strong> to toggle a column on/off. Use <strong>Normalize</strong> to put everything on a 0–1 scale so different units stay visible together. Responds to the file filter above.</p>
+    <div class="ts-controls">
+      <div class="ts-chip-panel">
+        <div class="ts-panel-title">Columns to plot</div>
+        <div class="ts-chips" id="ts-chips"></div>
+      </div>
+      <div class="ts-options">
+        <div class="ts-panel-title">Options</div>
+        <label class="ts-toggle">
+          <input type="checkbox" id="ts-normalize" checked> Normalize (0–1)
+        </label>
+        <label class="ts-toggle">
+          <input type="checkbox" id="ts-points"> Show data points
+        </label>
+        <div style="margin-top:0.25rem;">
+          <div class="ts-panel-title">X axis</div>
+          <select class="ts-xsel" id="ts-xaxis">
+            <option value="wall">Session time (wall clock)</option>
+            <option value="player">Player position</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div style="position:relative;height:440px;">
+        <canvas id="ts-canvas"></canvas>
+      </div>
+      <p class="chart-note" id="ts-note"></p>
+    </div>
+  </div>
+</div>
+
+<!-- Scatter modal -->
+<div class="modal-overlay" id="scatter-modal">
+  <div class="modal-box">
+    <button class="modal-close" id="modal-close">&times;</button>
+    <h3 id="modal-title"></h3>
+    <div class="modal-meta" id="modal-meta"></div>
+    <div class="scatter-wrapper">
+      <canvas id="scatter-canvas"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   State
+   ===================================================================== */
+let csvRows    = [];
+let numCols    = [];        // all numeric columns with variance
+let activeCols = new Set(); // column-filter selection
+let corrMx     = {};        // always reflects activeFile + activeCols
+let fileGroups = {};        // { '__ALL__': rows, 'file.mp4': rows, … }
+let corrByFile = {};        // pre-computed corrMx per file key
+let activeFile = '__ALL__';
+let scatterCh    = null;
+let hrCh         = null;
+let timeSeriesCh = null;
+let tsActiveCols = new Set();
+let filename     = 'session';
+
+const TS_COLORS = [
+  '#818cf8','#34d399','#f87171','#fbbf24','#60a5fa',
+  '#a78bfa','#f472b6','#2dd4bf','#fb923c','#a3e635',
+  '#38bdf8','#e879f9','#4ade80','#f9a8d4','#fdba74',
+];
+
+/* =====================================================================
+   File upload
+   ===================================================================== */
+const dropZone  = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+
+dropZone.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+document.getElementById('reload-btn').addEventListener('click', () => {
+  document.getElementById('report-screen').style.display = 'none';
+  document.getElementById('upload-screen').style.display = 'flex';
+  fileInput.value = '';
+});
+
+function loadFile(file) {
+  filename = file.name.replace(/\.csv$/i, '');
+  setLoading(true, 'Parsing CSV…');
+  Papa.parse(file, {
+    header: true, dynamicTyping: false, skipEmptyLines: true,
+    complete: result => {
+      setLoading(true, 'Computing correlations…');
+      setTimeout(() => {
+        try { processData(result.data, result.meta.fields || []); }
+        catch (err) { showError('Error: ' + err.message); }
+        setLoading(false);
+      }, 30);
+    },
+    error: err => { setLoading(false); showError('Could not read CSV: ' + (err.message || err)); }
+  });
+}
+
+function setLoading(on, msg) {
+  document.getElementById('loading').className = on ? 'show' : '';
+  if (msg) document.getElementById('loading-msg').textContent = msg;
+}
+function showError(msg) {
+  const b = document.getElementById('error-banner');
+  b.textContent = msg; b.style.display = 'block';
+}
+
+/* =====================================================================
+   Process data
+   ===================================================================== */
+function processData(rows, allCols) {
+  csvRows = rows;
+
+  // Detect numeric columns with actual variance
+  numCols = [];
+  for (const col of allCols) {
+    const vals = extractNums(rows, col);
+    if (vals.length < 5) continue;
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+    const variance = vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length;
+    if (variance > 0) numCols.push(col);
+  }
+
+  // Group rows by player_file
+  const NO_FILE_KEY = '(No file / Not connected)';
+  fileGroups = { '__ALL__': rows };
+  const seenFiles = [...new Set(rows.map(r => (r.player_file || '').trim()))];
+  for (const f of seenFiles) {
+    const key = f || NO_FILE_KEY;
+    fileGroups[key] = rows.filter(r => (r.player_file || '').trim() === f);
+  }
+
+  // Pre-compute correlation matrix for every file group
+  corrByFile = {};
+  for (const [key, grp] of Object.entries(fileGroups)) {
+    corrByFile[key] = computeCorrMx(grp, numCols);
+  }
+  activeFile = '__ALL__';
+  corrMx = corrByFile['__ALL__'];
+
+  buildPills(rows);
+  buildFileSelector();
+  buildTimeSeriesTab();
+  buildColPicker();  // sets activeCols = all, calls rebuildViews()
+
+  document.getElementById('upload-screen').style.display = 'none';
+  document.getElementById('report-screen').style.display = 'block';
+  document.getElementById('report-title').textContent    = filename;
+}
+
+/* =====================================================================
+   Summary pills
+   ===================================================================== */
+function buildPills(rows) {
+  let html = `
+    <div class="pill">Rows: <span>${rows.length.toLocaleString()}</span></div>
+    <div class="pill">Numeric cols: <span>${numCols.length}</span></div>
+  `;
+  const ts0 = rows[0]?.timestamp, ts1 = rows[rows.length - 1]?.timestamp;
+  if (ts0 && ts1) {
+    const t0 = ts0.split('T')[1]?.split('.')[0] || '';
+    const t1 = ts1.split('T')[1]?.split('.')[0] || '';
+    if (t0 && t1) html += `<div class="pill">Time: <span>${t0} – ${t1}</span></div>`;
+    const d0 = ts0.split('T')[0] || '';
+    if (d0) html += `<div class="pill">Date: <span>${d0}</span></div>`;
+  }
+  const pf = rows.find(r => r.player_file)?.player_file;
+  if (pf) {
+    const short = pf.length > 35 ? pf.slice(0, 35) + '…' : pf;
+    html += `<div class="pill">File: <span title="${pf}">${short}</span></div>`;
+  }
+  document.getElementById('pills').innerHTML = html;
+}
+
+/* =====================================================================
+   Correlation matrix helper
+   ===================================================================== */
+function computeCorrMx(rows, cols) {
+  const mx = {};
+  for (const c1 of cols) {
+    mx[c1] = {};
+    for (const c2 of cols) {
+      if (c1 === c2) { mx[c1][c2] = 1; continue; }
+      mx[c1][c2] = pearson(getPairs(rows, c1, c2));
+    }
+  }
+  return mx;
+}
+
+/* =====================================================================
+   File selector
+   ===================================================================== */
+function buildFileSelector() {
+  const bar = document.getElementById('file-bar');
+  const sel = document.getElementById('file-select');
+  const NO_FILE_KEY = '(No file / Not connected)';
+  const fileKeys = Object.keys(fileGroups).filter(k => k !== '__ALL__' && k !== NO_FILE_KEY);
+  fileKeys.sort();
+  if (fileGroups[NO_FILE_KEY]) fileKeys.push(NO_FILE_KEY);
+
+  if (fileKeys.length <= 1) { bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+
+  const allRows = fileGroups['__ALL__'];
+  let html = `<option value="__ALL__">All files — ${allRows.length.toLocaleString()} rows</option>`;
+  for (const k of fileKeys) {
+    const n = fileGroups[k].length;
+    const lbl = k.length > 55 ? k.slice(0, 55) + '…' : k;
+    html += `<option value="${escA(k)}">${escH(lbl)} — ${n.toLocaleString()} rows</option>`;
+  }
+  sel.innerHTML = html;
+  sel.value = activeFile;
+  sel.addEventListener('change', () => {
+    activeFile = sel.value;
+    corrMx     = corrByFile[activeFile];
+    updateFileStat();
+    rebuildViews();
+    renderTimeSeries();
+  });
+  updateFileStat();
+}
+
+function updateFileStat() {
+  const el   = document.getElementById('file-stat');
+  const rows = fileGroups[activeFile] || [];
+  if (!rows.length) { el.innerHTML = ''; return; }
+  const stateCounts = {};
+  for (const r of rows) {
+    const s = (r.player_state || 'Unknown').replace('CONNECTED_AND_', '').replace(/_/g, ' ');
+    stateCounts[s] = (stateCounts[s] || 0) + 1;
+  }
+  const pills = Object.entries(stateCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([s, n]) => `<span class="state-pill">${escH(s)}: ${n.toLocaleString()}</span>`)
+    .join('');
+  el.innerHTML = `<strong>${rows.length.toLocaleString()}</strong> rows ${pills}`;
+}
+
+/* =====================================================================
+   Column picker
+   ===================================================================== */
+function autoGroup(cols) {
+  const rules = [
+    ['Heart Rate',      c => /hr|bpm/i.test(c)],
+    ['Restim Playback', c => /playing/i.test(c)],
+    ['Volume',          c => /volume/i.test(c)],
+    ['Sensor (as5311)', c => /as5311/i.test(c)],
+    ['Aroma',           c => /aroma/i.test(c)],
+    ['Pressure',        c => /pressure/i.test(c)],
+    ['Switches',        c => /sonoff|lock/i.test(c)],
+    ['Player',          c => /player|speed|wall_time/i.test(c)],
+  ];
+  const groups = {}, done = new Set();
+  for (const [name, test] of rules) {
+    const m = cols.filter(c => test(c) && !done.has(c));
+    if (m.length) { groups[name] = m; m.forEach(c => done.add(c)); }
+  }
+  const rest = cols.filter(c => !done.has(c));
+  if (rest.length) groups['Other'] = rest;
+  return groups;
+}
+
+function buildColPicker() {
+  activeCols = new Set(numCols);
+  const groups = autoGroup(numCols);
+
+  let html = '<div class="col-groups">';
+  for (const [gname, cols] of Object.entries(groups)) {
+    const ga = escA(gname);
+    html += `<div class="col-group">
+      <label class="col-group-hdr">
+        <input type="checkbox" class="grp-chk" data-group="${ga}" checked>
+        ${escH(gname)}
+      </label>`;
+    for (const col of cols) {
+      html += `<div class="col-item">
+        <input type="checkbox" class="col-chk" data-col="${escA(col)}" data-group="${ga}" checked>
+        <label>${escH(col)}</label>
+      </div>`;
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  document.getElementById('col-picker-body').innerHTML = html;
+  updateColBadge();
+
+  document.getElementById('col-picker-toggle').addEventListener('click', e => {
+    if (e.target.closest('.picker-action-btn')) return;
+    const body  = document.getElementById('col-picker-body');
+    const arrow = document.getElementById('picker-arrow');
+    body.classList.toggle('open');
+    arrow.classList.toggle('open', body.classList.contains('open'));
+  });
+
+  document.getElementById('select-all-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    document.querySelectorAll('.col-chk').forEach(cb => {
+      cb.checked = true; activeCols.add(cb.dataset.col);
+      cb.closest('.col-item').classList.remove('off');
+    });
+    document.querySelectorAll('.grp-chk').forEach(cb => { cb.checked = true; cb.indeterminate = false; });
+    updateColBadge(); rebuildViews();
+  });
+  document.getElementById('deselect-all-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    document.querySelectorAll('.col-chk').forEach(cb => {
+      cb.checked = false; activeCols.delete(cb.dataset.col);
+      cb.closest('.col-item').classList.add('off');
+    });
+    document.querySelectorAll('.grp-chk').forEach(cb => { cb.checked = false; cb.indeterminate = false; });
+    updateColBadge(); rebuildViews();
+  });
+
+  document.getElementById('col-picker-body').addEventListener('change', e => {
+    if (e.target.classList.contains('col-chk')) {
+      const col = e.target.dataset.col;
+      e.target.checked ? activeCols.add(col) : activeCols.delete(col);
+      e.target.closest('.col-item').classList.toggle('off', !e.target.checked);
+      syncGroupChk(e.target.dataset.group);
+      updateColBadge(); rebuildViews();
+    } else if (e.target.classList.contains('grp-chk')) {
+      const gname = e.target.dataset.group;
+      document.querySelectorAll(`.col-chk[data-group="${CSS.escape(gname)}"]`).forEach(cb => {
+        cb.checked = e.target.checked;
+        e.target.checked ? activeCols.add(cb.dataset.col) : activeCols.delete(cb.dataset.col);
+        cb.closest('.col-item').classList.toggle('off', !e.target.checked);
+      });
+      updateColBadge(); rebuildViews();
+    }
+  });
+
+  rebuildViews();
+}
+
+function syncGroupChk(gname) {
+  const all = document.querySelectorAll(`.col-chk[data-group="${CSS.escape(gname)}"]`);
+  const n   = Array.from(all).filter(cb => cb.checked).length;
+  const grp = document.querySelector(`.grp-chk[data-group="${CSS.escape(gname)}"]`);
+  if (!grp) return;
+  grp.checked = n > 0; grp.indeterminate = n > 0 && n < all.length;
+}
+
+function updateColBadge() {
+  const badge = document.getElementById('col-count-badge');
+  const n = activeCols.size, total = numCols.length;
+  badge.textContent = `${n} / ${total} columns selected`;
+  badge.className = n === total ? 'full' : n === 0 ? '' : 'partial';
+}
+
+function rebuildViews() {
+  const list  = numCols.filter(c => activeCols.has(c));
+  const empty = '<p style="color:#6b7280;padding:1rem 0;">No columns selected — use the filter above to enable some.</p>';
+  if (list.length === 0) {
+    document.getElementById('matrix-container').innerHTML = empty;
+    document.getElementById('volume-container').innerHTML = '';
+    if (hrCh) { hrCh.destroy(); hrCh = null; }
+    return;
+  }
+  buildHeatmap('matrix-container', list, list);
+  buildHRChart(list);
+  buildVolumeFocus(list);
+  renderTimeSeries();
+}
+
+/* =====================================================================
+   Heatmap
+   ===================================================================== */
+function buildHeatmap(containerId, rowCols, colCols) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  let html = '<table class="heatmap"><thead><tr><th class="corner"></th>';
+  for (const col of colCols) html += `<th class="col-lbl" title="${escH(col)}">${escH(col)}</th>`;
+  html += '</tr></thead><tbody>';
+  for (const rc of rowCols) {
+    html += `<tr><td class="row-lbl">${escH(rc)}</td>`;
+    for (const cc of colCols) {
+      const r    = corrMx[rc]?.[cc];
+      const diag = rc === cc;
+      const bg   = corrToColor(r);
+      const fg   = corrToFg(r);
+      const lbl  = (r === undefined || r === null || isNaN(r)) ? 'n/a' : r.toFixed(2);
+      const cls  = diag ? 'cell diag' : 'cell';
+      const dat  = diag ? '' : `data-c1="${escA(rc)}" data-c2="${escA(cc)}"`;
+      html += `<td class="${cls}" style="background:${bg};color:${fg};" title="${escH(rc)} × ${escH(cc)}: r = ${lbl}" ${dat}>${lbl}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+// Event delegation for heatmap clicks
+document.addEventListener('click', e => {
+  const cell = e.target.closest('td.cell:not(.diag)');
+  if (!cell) return;
+  const c1 = cell.dataset.c1, c2 = cell.dataset.c2;
+  if (c1 && c2) openScatter(c1, c2);
+});
+
+/* =====================================================================
+   HR Focus bar chart
+   ===================================================================== */
+function buildHRChart(activeList) {
+  const hrCol = activeList.find(c => /hr.+bpm/i.test(c) || /bpm/i.test(c));
+
+  if (!hrCol) {
+    if (hrCh) { hrCh.destroy(); hrCh = null; }
+    document.getElementById('hr-chart-wrap').innerHTML =
+      '<p style="color:#6b7280;padding:2rem 0;">No HR / BPM column is currently selected.</p>';
+    return;
+  }
+  if (!document.getElementById('hr-bar-chart')) {
+    document.getElementById('hr-chart-wrap').innerHTML = '<canvas id="hr-bar-chart"></canvas>';
+  }
+
+  const entries = activeList
+    .filter(c => c !== hrCol)
+    .map(c => ({ col: c, r: corrMx[hrCol]?.[c] ?? NaN }))
+    .filter(x => !isNaN(x.r))
+    .sort((a, b) => Math.abs(b.r) - Math.abs(a.r));
+
+  const labels = entries.map(x => x.col);
+  const values = entries.map(x => x.r);
+  const colors = values.map(r =>
+    r > 0
+      ? `rgba(239,68,68,${(0.35 + 0.65 * Math.abs(r)).toFixed(2)})`
+      : `rgba(99,102,241,${(0.35 + 0.65 * Math.abs(r)).toFixed(2)})`
+  );
+
+  const h = Math.max(350, entries.length * 28 + 60);
+  document.getElementById('hr-chart-wrap').style.height = h + 'px';
+
+  if (hrCh) hrCh.destroy();
+  const ctx = document.getElementById('hr-bar-chart').getContext('2d');
+  hrCh = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{ data: values, backgroundColor: colors, borderColor: colors.map(c => c.replace(/[\d.]+\)$/, '1)')), borderWidth: 1, borderRadius: 3 }]
+    },
+    options: {
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { title: ctx => `${hrCol}  ×  ${ctx[0].label}`, label: ctx => ` r = ${ctx.parsed.x.toFixed(4)}` } }
+      },
+      scales: {
+        x: { min: -1, max: 1, ticks: { color: '#9ca3af', stepSize: 0.2 }, grid: { color: '#374151' }, title: { display: true, text: 'Pearson r', color: '#9ca3af', font: { size: 11 } } },
+        y: { ticks: { color: '#d1d5db', font: { size: 11 } }, grid: { color: 'rgba(55,65,81,0.5)' } }
+      },
+      onClick: (evt, elements) => { if (elements.length > 0) openScatter(hrCol, labels[elements[0].index]); }
+    }
+  });
+}
+
+/* =====================================================================
+   Volume + Sensor sub-matrix
+   ===================================================================== */function buildVolumeFocus(activeList) {
+  const keywords = ['volume', 'as5311', 'hr', 'restim', 'pressure', 'aroma', 'bpm'];
+  const subset = activeList.filter(c => keywords.some(k => c.toLowerCase().includes(k)));
+  const container = document.getElementById('volume-container');
+  if (subset.length === 0) {
+    container.innerHTML = '<p style="color:#6b7280;padding:1rem 0;">No matching columns in the current selection.</p>';
+    return;
+  }
+  buildHeatmap('volume-container', subset, subset);
+}
+
+/* =====================================================================
+   Time Series
+   ===================================================================== */
+function buildTimeSeriesTab() {
+  tsActiveCols = new Set();
+  // Sensible defaults
+  const defaultTests = [
+    c => /bpm/i.test(c),
+    c => /as5311_mm/i.test(c),
+    c => /restim-1-volume_pct/i.test(c),
+    c => /restim-1-playing_pct/i.test(c),
+    c => /aroma_pct/i.test(c),
+  ];
+  for (const test of defaultTests) {
+    const hit = numCols.find(c => test(c) && !tsActiveCols.has(c));
+    if (hit) tsActiveCols.add(hit);
+  }
+  if (!tsActiveCols.size) numCols.slice(0, 4).forEach(c => tsActiveCols.add(c));
+
+  const wrap = document.getElementById('ts-chips');
+  wrap.innerHTML = '';
+  numCols.forEach((col, i) => {
+    const color  = TS_COLORS[i % TS_COLORS.length];
+    const active = tsActiveCols.has(col);
+    const chip   = document.createElement('span');
+    chip.className   = 'ts-chip' + (active ? ' active' : '');
+    chip.style.setProperty('--c', color);
+    chip.dataset.col = col;
+    chip.innerHTML   = `<span class="chip-dot"></span>${escH(col)}`;
+    chip.addEventListener('click', () => {
+      if (tsActiveCols.has(col)) { tsActiveCols.delete(col); chip.classList.remove('active'); }
+      else                       { tsActiveCols.add(col);    chip.classList.add('active');    }
+      renderTimeSeries();
+    });
+    wrap.appendChild(chip);
+  });
+
+  document.getElementById('ts-normalize').addEventListener('change', renderTimeSeries);
+  document.getElementById('ts-points').addEventListener('change', renderTimeSeries);
+  document.getElementById('ts-xaxis').addEventListener('change', renderTimeSeries);
+}
+
+function renderTimeSeries() {
+  const rows = fileGroups[activeFile] || csvRows;
+  if (!rows.length || !tsActiveCols.size) {
+    if (timeSeriesCh) { timeSeriesCh.destroy(); timeSeriesCh = null; }
+    return;
+  }
+
+  const normalize  = document.getElementById('ts-normalize')?.checked ?? true;
+  const showPoints = document.getElementById('ts-points')?.checked    ?? false;
+  const xMode      = document.getElementById('ts-xaxis')?.value       ?? 'wall';
+
+  // Subsample to max 2000 points
+  const MAX  = 2000;
+  const step = Math.max(1, Math.ceil(rows.length / MAX));
+  const sample = rows.filter((_, i) => i % step === 0);
+
+  // X values
+  const xBase = parseFloat(rows[0]?.wall_time_s ?? 0);
+  const xVals = sample.map(r => {
+    if (xMode === 'player') {
+      const v = parseFloat(r.player_time_ms);
+      return isNaN(v) || v === 0 ? null : v / 1000;
+    }
+    const v = parseFloat(r.wall_time_s);
+    return isNaN(v) ? null : v - xBase;
+  });
+
+  // One dataset per active column — color assigned by stable index in numCols
+  const datasets = [];
+  numCols.forEach((col, i) => {
+    if (!tsActiveCols.has(col)) return;
+    const color = TS_COLORS[i % TS_COLORS.length];
+    let vals = sample.map(r => { const v = parseFloat(r[col]); return isNaN(v) ? null : v; });
+
+    if (normalize) {
+      const nonNull = vals.filter(v => v !== null);
+      if (nonNull.length) {
+        const mn = Math.min(...nonNull), mx = Math.max(...nonNull), rng = mx - mn;
+        vals = vals.map(v => v === null ? null : rng === 0 ? 0 : (v - mn) / rng);
+      }
+    }
+
+    const data = xVals
+      .map((x, j) => (x !== null && vals[j] !== null) ? { x, y: vals[j] } : null)
+      .filter(Boolean);
+
+    datasets.push({
+      label: col, data,
+      borderColor: color, backgroundColor: color + '22',
+      borderWidth: 1.5,
+      pointRadius: showPoints ? 2 : 0, pointHoverRadius: 4,
+      fill: false, tension: 0.15, spanGaps: false,
+    });
+  });
+
+  const xLabel  = xMode === 'player' ? 'Player position' : 'Session time';
+  const yLabel  = normalize ? 'Normalized (0–1)' : 'Value';
+  const fmtTime = v => {
+    const m = Math.floor(v / 60), s = Math.floor(v % 60);
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+
+  if (timeSeriesCh) { timeSeriesCh.destroy(); timeSeriesCh = null; }
+  const ctx = document.getElementById('ts-canvas')?.getContext('2d');
+  if (!ctx) return;
+
+  timeSeriesCh = new Chart(ctx, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration: 120 },
+      parsing: false,
+      plugins: {
+        legend: {
+          display: true, position: 'top',
+          labels: { color: '#9ca3af', font: { size: 10 }, boxWidth: 10, padding: 8 }
+        },
+        tooltip: {
+          mode: 'index', intersect: false,
+          callbacks: {
+            title: items => `${xLabel}: ${fmtTime(items[0]?.parsed?.x ?? 0)}`,
+            label: item => {
+              const v = normalize ? item.parsed.y?.toFixed(3) : item.parsed.y?.toFixed(2);
+              return ` ${item.dataset.label}: ${v ?? 'n/a'}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'linear',
+          ticks: { color: '#9ca3af', maxTicksLimit: 12, callback: v => fmtTime(v) },
+          grid: { color: '#374151' },
+          title: { display: true, text: `${xLabel} (mm:ss)`, color: '#9ca3af', font: { size: 11 } }
+        },
+        y: {
+          ticks: { color: '#9ca3af' }, grid: { color: '#374151' },
+          title: { display: true, text: yLabel, color: '#9ca3af', font: { size: 11 } }
+        }
+      }
+    }
+  });
+
+  const noteEl = document.getElementById('ts-note');
+  if (noteEl) {
+    noteEl.innerHTML = step > 1
+      ? `Showing every ${step}th sample &nbsp;·&nbsp; <span>${sample.length.toLocaleString()}</span> of ${rows.length.toLocaleString()} rows &nbsp;·&nbsp; ${datasets.length} series`
+      : `<span>${rows.length.toLocaleString()}</span> rows &nbsp;·&nbsp; ${datasets.length} series`;
+  }
+}
+
+/* =====================================================================
+   Scatter modal
+   ===================================================================== */
+function openScatter(col1, col2) {
+  const activeRows = fileGroups[activeFile] || csvRows;
+  const pairs = getPairs(activeRows, col1, col2);
+  if (pairs.length < 3) { alert('Not enough overlapping data for these columns.'); return; }
+
+  const MAX    = 1500;
+  const sample = pairs.length > MAX
+    ? pairs.filter((_, i) => i % Math.ceil(pairs.length / MAX) === 0)
+    : pairs;
+  const r    = corrMx[col1]?.[col2] ?? pearson(pairs);
+  const reg  = linReg(pairs);
+  const xs   = pairs.map(p => p[0]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+
+  const abs      = Math.abs(r);
+  const strength = abs >= 0.7 ? 'strong' : abs >= 0.4 ? 'moderate' : abs >= 0.2 ? 'weak' : 'negligible';
+  const dir      = r > 0 ? 'positive' : 'negative';
+
+  document.getElementById('modal-title').textContent = `${col1}   ×   ${col2}`;
+  document.getElementById('modal-meta').innerHTML =
+    `<strong>r = ${r.toFixed(4)}</strong> &nbsp;·&nbsp; ${strength} ${dir} correlation &nbsp;·&nbsp; ` +
+    `${pairs.length.toLocaleString()} paired rows &nbsp;·&nbsp; ` +
+    `y = ${reg.slope.toFixed(4)}x + ${reg.intercept.toFixed(4)}` +
+    (pairs.length > MAX ? ` &nbsp;·&nbsp; (${sample.length} sampled points shown)` : '');
+
+  if (scatterCh) scatterCh.destroy();
+  const ctx = document.getElementById('scatter-canvas').getContext('2d');
+  scatterCh = new Chart(ctx, {
+    type: 'scatter',
+    data: {
+      datasets: [
+        {
+          label: 'Points',
+          data: sample.map(([x, y]) => ({ x, y })),
+          backgroundColor: 'rgba(129,140,248,0.22)',
+          pointRadius: 3, pointHoverRadius: 5, pointBorderWidth: 0,
+        },
+        {
+          label: 'Trend', type: 'line',
+          data: [
+            { x: minX, y: reg.slope * minX + reg.intercept },
+            { x: maxX, y: reg.slope * maxX + reg.intercept }
+          ],
+          borderColor: 'rgba(239,68,68,0.85)', borderWidth: 2, pointRadius: 0, fill: false,
+        }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          filter: item => item.datasetIndex === 0,
+          callbacks: { label: ctx => `(${ctx.parsed.x.toFixed(3)}, ${ctx.parsed.y.toFixed(3)})` }
+        }
+      },
+      scales: {
+        x: { ticks: { color: '#9ca3af', maxTicksLimit: 8 }, grid: { color: '#374151' }, title: { display: true, text: col1, color: '#9ca3af', font: { size: 11 } } },
+        y: { ticks: { color: '#9ca3af', maxTicksLimit: 8 }, grid: { color: '#374151' }, title: { display: true, text: col2, color: '#9ca3af', font: { size: 11 } } }
+      }
+    }
+  });
+
+  document.getElementById('scatter-modal').classList.add('open');
+}
+
+document.getElementById('modal-close').addEventListener('click', closeModal);
+document.getElementById('scatter-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('scatter-modal')) closeModal();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+function closeModal() { document.getElementById('scatter-modal').classList.remove('open'); }
+
+/* =====================================================================
+   Tabs
+   ===================================================================== */
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+/* =====================================================================
+   Math helpers
+   ===================================================================== */
+function extractNums(rows, col) {
+  const out = [];
+  for (const row of rows) { const v = parseFloat(row[col]); if (!isNaN(v)) out.push(v); }
+  return out;
+}
+
+function getPairs(rows, c1, c2) {
+  const out = [];
+  for (const row of rows) {
+    const x = parseFloat(row[c1]), y = parseFloat(row[c2]);
+    if (!isNaN(x) && !isNaN(y)) out.push([x, y]);
+  }
+  return out;
+}
+
+function pearson(pairs) {
+  const n = pairs.length;
+  if (n < 3) return NaN;
+  let sx = 0, sy = 0, sxy = 0, sx2 = 0, sy2 = 0;
+  for (const [x, y] of pairs) { sx += x; sy += y; sxy += x*y; sx2 += x*x; sy2 += y*y; }
+  const num = n * sxy - sx * sy;
+  const den = Math.sqrt((n * sx2 - sx ** 2) * (n * sy2 - sy ** 2));
+  return den === 0 ? NaN : Math.max(-1, Math.min(1, num / den));
+}
+
+function linReg(pairs) {
+  const n = pairs.length;
+  let sx = 0, sy = 0, sxy = 0, sx2 = 0;
+  for (const [x, y] of pairs) { sx += x; sy += y; sxy += x*y; sx2 += x*x; }
+  const denom = n * sx2 - sx ** 2;
+  if (denom === 0) return { slope: 0, intercept: sy / n };
+  const slope = (n * sxy - sx * sy) / denom;
+  return { slope, intercept: (sy - slope * sx) / n };
+}
+
+/* =====================================================================
+   Color helpers
+   ===================================================================== */
+function corrToColor(r) {
+  if (r === undefined || r === null || isNaN(r)) return '#1f2937';
+  const c = Math.max(-1, Math.min(1, r));
+  if (c >= 0) return `rgb(255,${Math.round(255 - 200*c)},${Math.round(255 - 200*c)})`;
+  const t = -c;
+  return `rgb(${Math.round(255 - 200*t)},${Math.round(255 - 200*t)},255)`;
+}
+function corrToFg(r) {
+  if (r === undefined || r === null || isNaN(r)) return '#6b7280';
+  return Math.abs(r) >= 0.52 ? '#111' : '#374151';
+}
+
+/* =====================================================================
+   HTML escape helpers
+   ===================================================================== */
+function escH(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function escA(s) {
+  return String(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+</script>
+</body>
+</html>
