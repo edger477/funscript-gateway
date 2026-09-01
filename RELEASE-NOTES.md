@@ -2,6 +2,38 @@
 
 ---
 
+## v0.4.0
+
+### Fixes
+
+#### Cross-platform config location
+The config directory now follows platform conventions instead of always using
+the Windows `%APPDATA%` layout:
+
+| Platform | Path |
+|----------|------|
+| Windows | `%APPDATA%\funscript-gateway\` (unchanged) |
+| macOS | `~/Library/Application Support/funscript-gateway/` |
+| Linux | `$XDG_CONFIG_HOME/funscript-gateway/` (`~/.config/funscript-gateway/` by default) |
+
+A directory left by an older build in the home folder (`~/funscript-gateway`)
+is migrated to the new location automatically on first launch. `config.toml`,
+`funscript_gateway.log`, and `data_log/` all move together.
+
+#### "Open log folder" button works on Linux and macOS
+The button used the Windows-only `os.startfile`, so it silently did nothing on
+other platforms. It now uses `QDesktopServices.openUrl`, which opens the
+folder in the platform file manager everywhere.
+
+### New
+
+#### Linux AppImage
+Releases now include `funscript-gateway-x86_64.AppImage` alongside the Windows
+`.exe`. Built by `scripts/build_appimage.py` and by the release workflow on
+Ubuntu 22.04.
+
+---
+
 ## v0.3.0
 
 ### New features
