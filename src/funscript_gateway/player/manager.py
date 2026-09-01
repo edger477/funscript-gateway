@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 _RETRY_DELAY_S = 5.0
 _STALE_TIMESTAMP_S = 5.0
+_WATCHDOG_INTERVAL_S = 1.0
 
 
 class PlayerConnectionManager:
@@ -25,6 +26,7 @@ class PlayerConnectionManager:
     def __init__(self, app_state: AppState) -> None:
         self._app_state = app_state
         self._task: asyncio.Task | None = None
+        self._watchdog_task: asyncio.Task | None = None
         self._running = False
         self._last_time_ms: int | None = None
         self._last_time_changed_at: float = 0.0
@@ -32,16 +34,19 @@ class PlayerConnectionManager:
     async def start(self) -> None:
         self._running = True
         self._task = asyncio.ensure_future(self._run())
+        self._watchdog_task = asyncio.ensure_future(self._watchdog_loop())
 
     async def stop(self) -> None:
         self._running = False
-        if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
-            self._task = None
+        for task in (self._task, self._watchdog_task):
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+        self._task = None
+        self._watchdog_task = None
 
     def _apply_stale_timestamp_detection(self, state: PlayerState) -> PlayerState:
         """Override PLAYING→PAUSED when the timestamp has been frozen for too long."""
@@ -72,6 +77,32 @@ class PlayerConnectionManager:
         self._app_state.player_state = state
         self._app_state.current_time_ms = state.current_time_ms
         self._app_state.player_state_changed.emit(state)
+
+    def _reevaluate(self) -> None:
+        """Re-apply stale-timestamp detection to the current state, on a timer.
+
+        Backends only call ``_on_state_change`` when the player pushes an
+        update. A player that goes silent — or, for HereSphere, keeps the
+        connection alive but sends only keep-alive bytes — would otherwise
+        never be re-checked, leaving outputs running against a frozen
+        timestamp. This lets the frozen->paused rule fire without new payloads.
+        """
+        current = self._app_state.player_state
+        if current.connection_state != MediaConnectionState.CONNECTED_AND_PLAYING:
+            return
+        updated = self._apply_stale_timestamp_detection(current)
+        if updated.connection_state != current.connection_state:
+            self._app_state.player_state = updated
+            self._app_state.current_time_ms = updated.current_time_ms
+            self._app_state.player_state_changed.emit(updated)
+
+    async def _watchdog_loop(self) -> None:
+        while self._running:
+            await asyncio.sleep(_WATCHDOG_INTERVAL_S)
+            try:
+                self._reevaluate()
+            except Exception:  # noqa: BLE001
+                logger.exception("Player watchdog error")
 
     async def _run(self) -> None:
         while self._running:

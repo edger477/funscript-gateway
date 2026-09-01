@@ -190,3 +190,49 @@ class TestReadLoopFraming:
         assert len(states) >= 2
         assert states[0].current_time_ms == 1000
         assert states[1].current_time_ms == 2000
+
+
+class TestReadLoopIdleTimeout:
+    @pytest.mark.asyncio
+    async def test_read_loop_raises_on_prolonged_silence(self, monkeypatch):
+        from funscript_gateway.player import heresphere as hs
+
+        monkeypatch.setattr(hs, "_IDLE_TIMEOUT_S", 0.05)
+        backend, states = make_backend()
+
+        reader = asyncio.StreamReader()  # nothing fed, no EOF -> blocks
+
+        with pytest.raises(ConnectionError):
+            await backend._read_loop(reader)
+        assert states == []
+
+    @pytest.mark.asyncio
+    async def test_read_loop_survives_slow_keepalives(self, monkeypatch):
+        import json as _json
+
+        from funscript_gateway.player import heresphere as hs
+
+        monkeypatch.setattr(hs, "_IDLE_TIMEOUT_S", 0.2)
+        backend, states = make_backend()
+
+        reader = asyncio.StreamReader()
+
+        async def feeder():
+            for _ in range(3):
+                await asyncio.sleep(0.05)
+                reader.feed_data(b"\x00")  # keep-alive within the timeout window
+            payload = _json.dumps(
+                {"playerState": 0, "currentTime": 9.0, "path": "/v.mp4", "playbackSpeed": 1.0}
+            ).encode()
+            reader.feed_data(struct.pack("<I", len(payload)) + payload)
+            reader.feed_eof()
+
+        feed_task = asyncio.ensure_future(feeder())
+        try:
+            await asyncio.wait_for(backend._read_loop(reader), timeout=2.0)
+        except (asyncio.IncompleteReadError, asyncio.TimeoutError):
+            pass
+        await feed_task
+
+        assert len(states) == 1
+        assert states[0].current_time_ms == 9000

@@ -12,6 +12,11 @@ from funscript_gateway.models import MediaConnectionState, PlayerState
 
 logger = logging.getLogger(__name__)
 
+# HereSphere sends a keep-alive 0x00 byte roughly every 1000 ms when idle, and
+# state frames far more often during playback. Total silence for this long means
+# the link is dead (app closed, headset asleep, network dropped without a FIN).
+_IDLE_TIMEOUT_S = 10.0
+
 
 class HereSphereBackend:
     """Async TCP client for the HereSphere player protocol.
@@ -53,8 +58,17 @@ class HereSphereBackend:
     async def _read_loop(self, reader: asyncio.StreamReader) -> None:
         """Read framed messages, discarding lone 0x00 keep-alive bytes."""
         while True:
-            # Read the first byte of the header.
-            first_byte = await reader.readexactly(1)
+            # Read the first byte of the header. A prolonged silence (no state
+            # frames and no keep-alive) means the connection is dead — bail out
+            # so PlayerConnectionManager reconnects and reports NOT_CONNECTED.
+            try:
+                first_byte = await asyncio.wait_for(
+                    reader.readexactly(1), _IDLE_TIMEOUT_S
+                )
+            except asyncio.TimeoutError as exc:
+                raise ConnectionError(
+                    f"no data from HereSphere for {_IDLE_TIMEOUT_S:.0f}s"
+                ) from exc
             if first_byte == b"\x00":
                 # Keep-alive null byte — discard and wait for next message.
                 continue
