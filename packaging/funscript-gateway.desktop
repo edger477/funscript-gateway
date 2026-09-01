@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=funscript-gateway
+GenericName=Funscript Gateway
+Comment=Bridge video players to smart home/IoT outputs via funscript axes
+Exec=funscript-gateway
+Icon=funscript-gateway
+Categories=Utility;
+Terminal=false
+StartupNotify=false

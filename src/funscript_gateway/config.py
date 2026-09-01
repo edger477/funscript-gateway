@@ -1,6 +1,11 @@
 """Configuration persistence for funscript-gateway.
 
-Reads/writes TOML at %APPDATA%\\funscript-gateway\\config.toml.
+Reads/writes TOML at a platform-appropriate location:
+
+* Windows: ``%APPDATA%\\funscript-gateway\\config.toml``
+* macOS:   ``~/Library/Application Support/funscript-gateway/config.toml``
+* Linux:   ``$XDG_CONFIG_HOME/funscript-gateway/config.toml``
+           (``~/.config/funscript-gateway/config.toml`` by default)
 """
 
 from __future__ import annotations
@@ -8,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import sys
 import tempfile
 try:
     import tomllib
@@ -41,9 +47,60 @@ from funscript_gateway.models import (
 
 logger = logging.getLogger(__name__)
 
-CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "funscript-gateway"
+_APP_DIR_NAME = "funscript-gateway"
+
+
+def _default_config_dir() -> Path:
+    """Return the platform-appropriate config directory."""
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or str(Path.home())
+        return Path(base) / _APP_DIR_NAME
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / _APP_DIR_NAME
+    # Linux / other POSIX: follow the XDG Base Directory spec.
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / _APP_DIR_NAME
+
+
+# Legacy location used before 0.4.0 (bare folder in $HOME on non-Windows).
+_LEGACY_CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / _APP_DIR_NAME
+
+
+def _migrate_legacy_config_dir() -> None:
+    """Move a pre-0.4.0 config dir to the current location, once."""
+    if _LEGACY_CONFIG_DIR == CONFIG_DIR:
+        return
+    if CONFIG_PATH.exists() or not (_LEGACY_CONFIG_DIR / "config.toml").exists():
+        return
+    try:
+        if CONFIG_DIR.exists():
+            # Destination exists but has no config.toml: move entries into it.
+            for entry in _LEGACY_CONFIG_DIR.iterdir():
+                dest = CONFIG_DIR / entry.name
+                if not dest.exists():
+                    shutil.move(str(entry), str(dest))
+            if not any(_LEGACY_CONFIG_DIR.iterdir()):
+                _LEGACY_CONFIG_DIR.rmdir()
+        else:
+            CONFIG_DIR.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(_LEGACY_CONFIG_DIR), str(CONFIG_DIR))
+        logger.info("Migrated config from %s to %s.", _LEGACY_CONFIG_DIR, CONFIG_DIR)
+    except OSError as exc:
+        logger.warning(
+            "Could not migrate config from %s to %s (%s); using %s.",
+            _LEGACY_CONFIG_DIR,
+            CONFIG_DIR,
+            exc,
+            CONFIG_DIR,
+        )
+
+
+CONFIG_DIR = _default_config_dir()
 CONFIG_PATH = CONFIG_DIR / "config.toml"
 LOG_PATH = CONFIG_DIR / "funscript_gateway.log"
+
+_migrate_legacy_config_dir()
 
 
 # ---------------------------------------------------------------------------
