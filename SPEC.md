@@ -1105,23 +1105,34 @@ The `_evaluation_loop` calls `_handle_disconnect` on the first tick where `conne
 
 ## 7. Configuration Persistence
 
-Configuration is stored as a TOML file at:
+Configuration is stored as a TOML file in a platform-appropriate directory:
 
 ```
 Windows: %APPDATA%\funscript-gateway\config.toml
+macOS:   ~/Library/Application Support/funscript-gateway/config.toml
+Linux:   $XDG_CONFIG_HOME/funscript-gateway/config.toml
+         (~/.config/funscript-gateway/config.toml by default)
 ```
 
 Resolved in Python as:
 
 ```python
-import os
+import os, sys
 from pathlib import Path
 
-CONFIG_DIR = Path(os.environ.get('APPDATA', Path.home())) / 'funscript-gateway'
+if sys.platform == 'win32':
+    CONFIG_DIR = Path(os.environ.get('APPDATA') or Path.home()) / 'funscript-gateway'
+elif sys.platform == 'darwin':
+    CONFIG_DIR = Path.home() / 'Library' / 'Application Support' / 'funscript-gateway'
+else:
+    _xdg = os.environ.get('XDG_CONFIG_HOME')
+    CONFIG_DIR = (Path(_xdg) if _xdg else Path.home() / '.config') / 'funscript-gateway'
 CONFIG_PATH = CONFIG_DIR / 'config.toml'
 ```
 
-The directory is created on first run if it does not exist.
+The directory is created on first run if it does not exist. A pre-0.4.0
+directory in the home folder (`~/funscript-gateway`) is migrated to the new
+location automatically on first launch.
 
 **Example `config.toml`:**
 
@@ -1794,11 +1805,8 @@ Shutdown sequence:
 
 ### Application Logging
 
-Log file location:
-
-```
-%APPDATA%\funscript-gateway\funscript_gateway.log
-```
+Log file location: `funscript_gateway.log` inside `CONFIG_DIR` (see
+§7 Configuration Persistence for the per-platform path).
 
 Configuration (in `main.py`):
 

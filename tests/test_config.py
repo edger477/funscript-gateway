@@ -366,3 +366,77 @@ class TestConfigRoundTrip:
         assert len(result.outputs) == 1
         assert result.outputs[0].input_name == "vibration"
         assert result.outputs[0].on_missing_input == "force_off"
+
+
+class TestConfigDir:
+    """Platform-aware config directory resolution and legacy migration."""
+
+    def test_default_config_dir_linux_xdg(self):
+        from funscript_gateway import config as config_module
+
+        with (
+            mock.patch.object(config_module.sys, "platform", "linux"),
+            mock.patch.dict(config_module.os.environ, {"XDG_CONFIG_HOME": "/xdg"}, clear=False),
+        ):
+            assert config_module._default_config_dir() == Path("/xdg/funscript-gateway")
+
+    def test_default_config_dir_linux_default(self):
+        from funscript_gateway import config as config_module
+
+        env = {k: v for k, v in config_module.os.environ.items() if k != "XDG_CONFIG_HOME"}
+        with (
+            mock.patch.object(config_module.sys, "platform", "linux"),
+            mock.patch.dict(config_module.os.environ, env, clear=True),
+        ):
+            assert config_module._default_config_dir() == Path.home() / ".config" / "funscript-gateway"
+
+    def test_default_config_dir_macos(self):
+        from funscript_gateway import config as config_module
+
+        with mock.patch.object(config_module.sys, "platform", "darwin"):
+            expected = Path.home() / "Library" / "Application Support" / "funscript-gateway"
+            assert config_module._default_config_dir() == expected
+
+    def test_migrate_legacy_config_dir(self):
+        from funscript_gateway import config as config_module
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            legacy = root / "legacy" / "funscript-gateway"
+            legacy.mkdir(parents=True)
+            (legacy / "config.toml").write_text('[player]\ntype = "heresphere"\n')
+            (legacy / "funscript_gateway.log").write_text("old log")
+            new_dir = root / "xdg" / "funscript-gateway"
+
+            with (
+                mock.patch.object(config_module, "_LEGACY_CONFIG_DIR", legacy),
+                mock.patch.object(config_module, "CONFIG_DIR", new_dir),
+                mock.patch.object(config_module, "CONFIG_PATH", new_dir / "config.toml"),
+            ):
+                config_module._migrate_legacy_config_dir()
+
+            assert (new_dir / "config.toml").exists()
+            assert (new_dir / "funscript_gateway.log").read_text() == "old log"
+            assert not legacy.exists()
+
+    def test_migrate_skipped_when_target_has_config(self):
+        from funscript_gateway import config as config_module
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            legacy = root / "legacy" / "funscript-gateway"
+            legacy.mkdir(parents=True)
+            (legacy / "config.toml").write_text("legacy")
+            new_dir = root / "xdg" / "funscript-gateway"
+            new_dir.mkdir(parents=True)
+            (new_dir / "config.toml").write_text("current")
+
+            with (
+                mock.patch.object(config_module, "_LEGACY_CONFIG_DIR", legacy),
+                mock.patch.object(config_module, "CONFIG_DIR", new_dir),
+                mock.patch.object(config_module, "CONFIG_PATH", new_dir / "config.toml"),
+            ):
+                config_module._migrate_legacy_config_dir()
+
+            assert (new_dir / "config.toml").read_text() == "current"
+            assert legacy.exists()

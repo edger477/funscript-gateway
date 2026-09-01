@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#1e293b"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="url(#bg)"/>
+  <!-- funscript axis waveform -->
+  <path d="M28 128 C 60 40, 92 40, 124 128 S 188 216, 220 128"
+        fill="none" stroke="#e2e8f0" stroke-width="14" stroke-linecap="round"/>
+  <!-- output node -->
+  <circle cx="220" cy="128" r="16" fill="#38bdf8"/>
+  <circle cx="28" cy="128" r="12" fill="#f8fafc"/>
+</svg>

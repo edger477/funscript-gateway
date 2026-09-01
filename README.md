@@ -56,7 +56,10 @@ The gateway searches configured search paths and the video's own folder.
 
 ## Installation
 
-Download the latest `funscript-gateway.exe` from [Releases](../../releases) and run it. No installation required.
+Download the latest build from [Releases](../../releases) and run it. No installation required.
+
+- **Windows:** `funscript-gateway.exe`
+- **Linux:** `funscript-gateway-x86_64.AppImage` — `chmod +x` it and run. Built on Ubuntu 22.04 (needs glibc 2.35+).
 
 To run from source:
 
@@ -399,10 +402,11 @@ max_output = 110000.0
 
 funscript-gateway can record all inputs, outputs, and player state to a CSV file for later analysis. Enable it in **Settings → Data Logging**.
 
-Each session produces a timestamped file:
+Each session produces a timestamped file in the `data_log` subfolder of the
+[config directory](#configuration-file):
 
 ```
-%APPDATA%\funscript-gateway\data_log\session_YYYYMMDD_HHMMSS.csv
+<config-dir>\data_log\session_YYYYMMDD_HHMMSS.csv
 ```
 
 The file is wide-format — one row per sample, one column per signal — so you can load it directly into pandas or Excel and correlate columns without reshaping:
@@ -437,7 +441,7 @@ When a Funscript Axis input has no file for the current video, its `_pct` cell i
 |---------|-------------|
 | Enable | Turns logging on/off; takes effect immediately when Applied |
 | Sample interval | How often to write a row (0.1–60 s, default 1.0 s) |
-| Open log folder | Opens the log directory in Explorer |
+| Open log folder | Opens the `data_log` directory in the system file manager |
 
 The column layout is fixed when each session file opens. If you add new inputs or outputs mid-session, click **Apply** in Settings to start a fresh file that includes them.
 
@@ -445,25 +449,21 @@ The column layout is fixed when each session file opens. If you add new inputs o
 
 ## Configuration file
 
-Configuration is stored at:
+Configuration is stored per platform:
 
-```
-%APPDATA%\funscript-gateway\config.toml
-```
+| Platform | Path |
+|----------|------|
+| Windows | `%APPDATA%\funscript-gateway\config.toml` |
+| macOS | `~/Library/Application Support/funscript-gateway/config.toml` |
+| Linux | `$XDG_CONFIG_HOME/funscript-gateway/config.toml` (`~/.config/funscript-gateway/config.toml` by default) |
 
-It is written automatically by the UI. You can also edit it manually — the app reloads it on next start.
+It is written automatically by the UI. You can also edit it manually — the app reloads it on next start. A config directory left by an older version in the home folder is migrated automatically on first launch.
 
 ---
 
 ## Logging
 
-Log files are written to:
-
-```
-%APPDATA%\funscript-gateway\logs\funscript-gateway.log
-```
-
-Rotating logs, 1 MB per file, 5 backups kept. Run with `--debug` for verbose output.
+The log file (`funscript_gateway.log`) is written into the same directory as `config.toml` (see the table above). Rotating logs, 1 MB per file, 3 backups kept. Run with `--debug` for verbose output.
 
 ---
 
@@ -473,7 +473,8 @@ Requires Python 3.11+ and PyInstaller:
 
 ```bash
 pip install -e ".[dev]"
-python scripts/build.py
+python scripts/build.py            # Windows -> dist/funscript-gateway.exe
+python scripts/build_appimage.py   # Linux   -> dist/funscript-gateway-x86_64.AppImage
 ```
 
-Produces `dist/funscript-gateway.exe`.
+`build_appimage.py` downloads `appimagetool` on first run (cached in `build/`).

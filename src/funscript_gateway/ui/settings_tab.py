@@ -255,10 +255,14 @@ class SettingsTab(QWidget):
         await self._player_manager.start()
 
     def _on_open_log_dir(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
         from funscript_gateway.outputs.data_logger import DATA_LOG_DIR
-        import os
+
         DATA_LOG_DIR.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(DATA_LOG_DIR))  # noqa: S606
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(DATA_LOG_DIR))):
+            logger.warning("Could not open log folder %s", DATA_LOG_DIR)
 
     def _on_cancel(self) -> None:
         self._load_from_config()
