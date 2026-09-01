@@ -2,6 +2,26 @@
 
 ---
 
+## Unreleased
+
+### Fixes
+
+#### Silent HereSphere player now detected as paused / disconnected
+The "frozen player → paused" rule only ran when a fresh status frame arrived,
+so a HereSphere player that went silent (headset asleep, app backgrounded,
+network dropped without closing the socket) left the gateway stuck in
+`PLAYING`, driving outputs from a frozen timestamp instead of honouring
+`on_pause` / `on_disconnect`.
+
+- `PlayerConnectionManager` now runs a 1 s watchdog that re-checks the
+  frozen-timestamp rule even when no new frames arrive → outputs switch to
+  their `on_pause` behaviour after 5 s.
+- The HereSphere backend now aborts the connection after 10 s of total
+  silence (no frames and no keep-alive) → outputs switch to `on_disconnect`
+  and the manager reconnects.
+
+---
+
 ## v0.4.0
 
 ### Fixes
