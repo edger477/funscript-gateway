@@ -82,15 +82,24 @@ class FunscriptEngine:
             if sp_path.is_dir() and sp_path not in search_dirs:
                 search_dirs.append(sp_path)
 
-        # Find all funscript files matching the video basename
+        # Find all funscript files matching the video basename.
+        # Matching is done by literal prefix/suffix rather than glob, because
+        # basenames routinely contain glob metacharacters ("[1080p]", "*", "?")
+        # which would otherwise be interpreted as pattern syntax and match nothing.
+        prefix = f"{basename}."
+        suffix = ".funscript"
         found_files: dict[str, Path] = {}
         for directory in search_dirs:
-            pattern = f"{basename}.*.funscript"
-            for match in sorted(directory.glob(pattern)):
-                parts = match.name.split(".")
-                if len(parts) < 3:
+            try:
+                entries = sorted(directory.iterdir())
+            except OSError as exc:
+                logger.debug("Cannot list funscript directory %s: %s", directory, exc)
+                continue
+            for match in entries:
+                name = match.name
+                if not name.startswith(prefix) or not name.endswith(suffix):
                     continue
-                axis_name = ".".join(parts[len(basename.split(".")):len(parts) - 1])
+                axis_name = name[len(prefix):len(name) - len(suffix)]
                 if axis_name and axis_name not in found_files:
                     found_files[axis_name] = match
 
