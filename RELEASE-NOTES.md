@@ -2,9 +2,47 @@
 
 ---
 
-## Unreleased
+## v0.4.1
+
+### Features
+
+#### Hysteresis for Calculated (Logical) entries
+Each logical entry's comparison can now be **hysteresis** besides `≥` / `<`.
+It takes separate thresholds — e.g. *on ≥ 60, off < 40* — so the entry turns
+ON at 60, stays ON until the value drops below 40, and no longer flickers
+around a single threshold. Existing entries behave exactly as before.
 
 ### Fixes
+
+#### Display and outputs no longer freeze on a slow or unreachable device
+Live values on the Inputs/Outputs tabs were only repainted after every output
+had finished sending. An unresolvable Tasmota host name (≈8 s to fail on
+Linux) was retried every tick, so the display updated only every ~11 s.
+
+- The UI refreshes from its own 20 Hz timer, independent of the outputs.
+- Each output sends in the background; one slow device no longer delays the
+  others. Failed sends back off (0.5 s doubling up to 30 s) instead of being
+  retried every 50 ms. Restim autostart runs in the background.
+- Restim / Tasmota inputs are polled independently, so one slow endpoint no
+  longer delays calculated inputs. Tasmota inputs honour their timeout.
+- Quitting no longer waits on outputs already known to be unreachable.
+
+#### Outputs tab edited the wrong output after an MQTT failure
+An output whose MQTT connection failed was dropped from the runtime list, so
+Edit / Remove acted on the wrong row. It now stays listed as **INACTIVE**.
+
+#### Robustness
+- Evaluation and polling loops survive unexpected errors; errors from UI
+  handlers, threads and background tasks are now written to the log file.
+- HereSphere: oversized frames, non-object payloads and `null` fields no
+  longer break the connection. Short heart-rate packets and malformed AS5311
+  messages are ignored instead of forcing a reconnect.
+- Fixed leaks: dialogs and menus are freed after use, a failed MQTT connect
+  closes its socket, overlapping output reloads no longer orphan drivers.
+
+#### Funscripts not found for filenames containing `[`, `*` or `?`
+Discovery matched files with a glob pattern, so names like
+`video [1080p].mp4` found no funscripts. Matching is now literal.
 
 #### Silent HereSphere player now detected as paused / disconnected
 The "frozen player → paused" rule only ran when a fresh status frame arrived,
