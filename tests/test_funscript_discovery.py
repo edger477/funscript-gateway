@@ -1,6 +1,7 @@
 """Tests for funscript file discovery."""
 
 import json
+import sys
 
 import pytest
 
@@ -11,6 +12,12 @@ from funscript_gateway.models import FunscriptAxisInput
 
 def _write_funscript(path):
     path.write_text(json.dumps({"actions": [{"at": 0, "pos": 10}, {"at": 1000, "pos": 90}]}))
+
+
+# Windows forbids "?" and "*" in file names, so such files cannot exist there.
+_NOT_ON_WINDOWS = pytest.mark.skipif(
+    sys.platform == "win32", reason="'?' and '*' are invalid in Windows file names"
+)
 
 
 @pytest.fixture
@@ -25,8 +32,8 @@ class TestDiscover:
             "Plain Video",
             "My Video [1080p]",
             "Scene [VR] [8K]",
-            "Weird ? mark",
-            "Star * name",
+            pytest.param("Weird ? mark", marks=_NOT_ON_WINDOWS),
+            pytest.param("Star * name", marks=_NOT_ON_WINDOWS),
             "Dotted.name.v2",
         ],
     )
