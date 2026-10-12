@@ -86,6 +86,12 @@ class CalculatedEntry:
     above: bool = True          # True: entry is ON when value >= threshold; False: when value < threshold
     threshold: float = 50.0    # 0–100 threshold for converting the input value to boolean
     inverse: bool = False       # True: effective value = 100 - value before threshold comparison
+    # Hysteresis: when set, the entry switches ON at value >= threshold and OFF
+    # only once value < off_threshold, holding its state in between ("above" is
+    # ignored). None = plain comparison, as above.
+    off_threshold: float | None = None
+    # Runtime: last boolean result, needed to hold state inside the hysteresis band.
+    state: bool = field(default=False, compare=False, repr=False)
 
 
 @dataclass

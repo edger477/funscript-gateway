@@ -69,3 +69,50 @@ class TestHrParsing:
     @pytest.mark.parametrize("data", [b"", b"\x00", b"\x01\x2c"])
     def test_short_packets_return_none(self, data):
         assert _parse_hr_measurement(data) is None
+
+
+class TestCalculatedHysteresis:
+    @staticmethod
+    def _calc(**entry_kwargs):
+        from funscript_gateway.models import CalculatedEntry, CalculatedInput
+
+        return CalculatedInput(
+            name="c", entries=[CalculatedEntry(input_name="x", **entry_kwargs)]
+        )
+
+    def test_switches_on_at_threshold_and_holds_until_below_off(self):
+        from funscript_gateway.outputs.input_poller import _eval_calculated
+
+        calc = self._calc(threshold=60.0, off_threshold=40.0)
+        seq = [(50, 0), (60, 100), (50, 100), (40, 100), (39.9, 0), (50, 0), (61, 100)]
+        for value, expected in seq:
+            assert _eval_calculated(calc, {"x": value}) == expected, value
+
+    def test_without_off_threshold_behaves_as_plain_compare(self):
+        from funscript_gateway.outputs.input_poller import _eval_calculated
+
+        calc = self._calc(threshold=60.0)
+        assert [_eval_calculated(calc, {"x": v}) for v in (61, 50, 61)] == [100, 0, 100]
+
+    def test_off_above_on_degrades_to_plain_compare(self):
+        from funscript_gateway.outputs.input_poller import _eval_calculated
+
+        calc = self._calc(threshold=40.0, off_threshold=60.0)
+        assert [_eval_calculated(calc, {"x": v}) for v in (50, 39, 45)] == [100, 0, 100]
+
+    def test_inverse_applies_before_hysteresis(self):
+        from funscript_gateway.outputs.input_poller import _eval_calculated
+
+        calc = self._calc(threshold=60.0, off_threshold=40.0, inverse=True)
+        # effective = 100 - x
+        assert [_eval_calculated(calc, {"x": v}) for v in (30, 55, 61)] == [100, 100, 0]
+
+    def test_later_entries_update_state_even_when_result_is_decided(self):
+        from funscript_gateway.models import CalculatedEntry, CalculatedInput
+        from funscript_gateway.outputs.input_poller import _eval_calculated
+
+        hyst = CalculatedEntry(input_name="h", operator="and", threshold=60.0, off_threshold=40.0)
+        calc = CalculatedInput(name="c", entries=[CalculatedEntry(input_name="gate"), hyst])
+        _eval_calculated(calc, {"gate": 0, "h": 70})  # gate false, but h crosses on
+        assert hyst.state is True
+        assert _eval_calculated(calc, {"gate": 100, "h": 50}) == 100  # h held ON

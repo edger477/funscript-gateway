@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -304,7 +306,8 @@ class CalculatedDialog(QDialog):
     """Dialog for creating/editing a CalculatedInput (Logical).
 
     Each entry converts an input value to a boolean using a configurable
-    threshold and direction (≥ / <), then combines them with AND/OR/XOR.
+    threshold and direction (≥ / <), or a hysteresis band (on ≥ X, off < Y),
+    then combines them with AND/OR/XOR.
     """
 
     def __init__(
@@ -315,7 +318,7 @@ class CalculatedDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Calculated Input (Logical)")
-        self.setMinimumWidth(540)
+        self.setMinimumWidth(720)
 
         cfg = config or CalculatedInput(name="")
         self._available = list(available_inputs)
@@ -342,16 +345,15 @@ class CalculatedDialog(QDialog):
         self._entries_layout.setSpacing(4)
         layout.addWidget(self._entries_widget)
 
-        # Rows: list of (row_widget, op_combo|None, inp_combo, dir_combo, thresh_spin)
-        self._rows: list[tuple] = []
+        self._rows: list[_CalcRow] = []
 
         for entry in cfg.entries:
-            self._add_row(entry.input_name, entry.operator, entry.above, entry.threshold, entry.inverse)
+            self._add_row(entry)
         if not self._rows:
-            self._add_row("", "and", True, 50.0, False)
+            self._add_row(CalculatedEntry(input_name=""))
 
         add_btn = QPushButton("Add Entry")
-        add_btn.clicked.connect(lambda: self._add_row("", "and", True, 50.0, False))
+        add_btn.clicked.connect(lambda: self._add_row(CalculatedEntry(input_name="")))
         layout.addWidget(add_btn)
 
         buttons = QDialogButtonBox(
@@ -363,7 +365,7 @@ class CalculatedDialog(QDialog):
 
         self._update_formula()
 
-    def _add_row(self, input_name: str, operator: str, above: bool, threshold: float, inverse: bool) -> None:
+    def _add_row(self, entry: CalculatedEntry) -> None:
         row_widget = QWidget()
         row_h = QHBoxLayout(row_widget)
         row_h.setContentsMargins(0, 0, 0, 0)
@@ -375,71 +377,107 @@ class CalculatedDialog(QDialog):
         if not is_first:
             op_combo = QComboBox()
             op_combo.addItems(["and", "or", "xor"])
-            op_combo.setCurrentText(operator)
+            op_combo.setCurrentText(entry.operator)
             op_combo.setFixedWidth(112)
             op_combo.currentTextChanged.connect(self._update_formula)
             row_h.addWidget(op_combo)
         else:
-            spacer = QLabel("      ")
-            spacer.setFixedWidth(112)
-            row_h.addWidget(spacer)
+            row_h.addWidget(_op_spacer())
 
         inv_check = QCheckBox("inv")
-        inv_check.setChecked(inverse)
+        inv_check.setChecked(entry.inverse)
         inv_check.setToolTip("Invert: use (100 − value) before threshold comparison")
         inv_check.stateChanged.connect(self._update_formula)
         row_h.addWidget(inv_check)
 
         inp_combo = QComboBox()
         inp_combo.addItems(self._available)
-        if input_name in self._available:
-            inp_combo.setCurrentText(input_name)
+        if entry.input_name in self._available:
+            inp_combo.setCurrentText(entry.input_name)
         inp_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         inp_combo.currentTextChanged.connect(self._update_formula)
         row_h.addWidget(inp_combo)
 
         dir_combo = QComboBox()
-        dir_combo.addItems(["\u2265", "<"])   # ≥ / <
-        dir_combo.setCurrentIndex(0 if above else 1)
-        dir_combo.setFixedWidth(88)
-        dir_combo.currentTextChanged.connect(self._update_formula)
+        dir_combo.addItems([_DIR_ABOVE, _DIR_BELOW, _DIR_HYST])
+        if entry.off_threshold is not None:
+            dir_combo.setCurrentText(_DIR_HYST)
+        else:
+            dir_combo.setCurrentText(_DIR_ABOVE if entry.above else _DIR_BELOW)
+        dir_combo.setToolTip(
+            "≥ / <: plain comparison.\n"
+            "hysteresis: switches ON when value ≥ the on threshold and stays ON\n"
+            "until value drops below the off threshold."
+        )
+        dir_combo.setFixedWidth(112)
         row_h.addWidget(dir_combo)
 
         thresh_spin = QDoubleSpinBox()
         thresh_spin.setRange(0.0, 100.0)
         thresh_spin.setDecimals(1)
         thresh_spin.setSingleStep(5.0)
-        thresh_spin.setValue(threshold)
+        thresh_spin.setValue(entry.threshold)
         thresh_spin.setFixedWidth(144)
-        thresh_spin.valueChanged.connect(self._update_formula)
         row_h.addWidget(thresh_spin)
+
+        off_spin = QDoubleSpinBox()
+        off_spin.setRange(0.0, 100.0)
+        off_spin.setDecimals(1)
+        off_spin.setSingleStep(5.0)
+        off_spin.setPrefix("off < ")
+        off_spin.setToolTip("Switch OFF once the value drops below this (must be ≤ the on threshold)")
+        off_spin.setValue(
+            entry.off_threshold
+            if entry.off_threshold is not None
+            else max(0.0, entry.threshold - 20.0)
+        )
+        off_spin.setFixedWidth(144)
+        # Keep its slot when hidden so the columns stay aligned across rows.
+        policy = off_spin.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        off_spin.setSizePolicy(policy)
+        row_h.addWidget(off_spin)
 
         remove_btn = QToolButton()
         remove_btn.setText("\u2715")
         remove_btn.clicked.connect(lambda: self._remove_row(row_widget))
         row_h.addWidget(remove_btn)
 
+        row = _CalcRow(row_widget, op_combo, inv_check, inp_combo, dir_combo, thresh_spin, off_spin)
+        dir_combo.currentTextChanged.connect(lambda _t: self._on_mode_changed(row))
+        thresh_spin.valueChanged.connect(lambda _v: self._on_thresholds_changed(row))
+        off_spin.valueChanged.connect(self._update_formula)
+
         self._entries_layout.addWidget(row_widget)
-        self._rows.append((row_widget, op_combo, inv_check, inp_combo, dir_combo, thresh_spin))
+        self._rows.append(row)
+        self._on_mode_changed(row)
+
+    def _on_mode_changed(self, row: _CalcRow) -> None:
+        hyst = row.dir_combo.currentText() == _DIR_HYST
+        row.off_spin.setVisible(hyst)
+        row.thresh_spin.setPrefix("on \u2265 " if hyst else "")
+        self._on_thresholds_changed(row)
+
+    def _on_thresholds_changed(self, row: _CalcRow) -> None:
+        # Keep the band valid: off threshold can never exceed the on threshold.
+        row.off_spin.setMaximum(row.thresh_spin.value())
         self._update_formula()
 
     def _remove_row(self, row_widget: QWidget) -> None:
-        for i, (rw, *_) in enumerate(self._rows):
-            if rw is row_widget:
+        for i, row in enumerate(self._rows):
+            if row.widget is row_widget:
                 self._rows.pop(i)
-                rw.deleteLater()
+                row_widget.deleteLater()
                 break
         # If first row was removed, replace its operator combo with a spacer
         if self._rows:
-            new_first_widget, old_op, inv_check, inp, dir_combo, thresh_spin = self._rows[0]
-            if old_op is not None:
-                lyt = new_first_widget.layout()
-                lyt.removeWidget(old_op)
-                old_op.deleteLater()
-                spacer = QLabel("      ")
-                spacer.setFixedWidth(56)
-                lyt.insertWidget(0, spacer)
-                self._rows[0] = (new_first_widget, None, inv_check, inp, dir_combo, thresh_spin)
+            first = self._rows[0]
+            if first.op_combo is not None:
+                lyt = first.widget.layout()
+                lyt.removeWidget(first.op_combo)
+                first.op_combo.deleteLater()
+                lyt.insertWidget(0, _op_spacer())
+                first.op_combo = None
         self._update_formula()
 
     def _update_formula(self) -> None:
@@ -447,31 +485,66 @@ class CalculatedDialog(QDialog):
             self._formula_label.setText("Formula: (empty)")
             return
         parts = []
-        for _, _, inv, inp, d, t in self._rows:
-            name = f"(100\u2212{inp.currentText()})" if inv.isChecked() else inp.currentText()
-            parts.append(f"{name} {d.currentText()} {t.value():.1f}")
-        ops = [op.currentText() if op else "" for _, op, *_ in self._rows]
+        for row in self._rows:
+            name = row.inp_combo.currentText()
+            if row.inv_check.isChecked():
+                name = f"(100\u2212{name})"
+            mode = row.dir_combo.currentText()
+            if mode == _DIR_HYST:
+                parts.append(
+                    f"{name} [on \u2265 {row.thresh_spin.value():.1f}, "
+                    f"off < {row.off_spin.value():.1f}]"
+                )
+            else:
+                parts.append(f"{name} {mode} {row.thresh_spin.value():.1f}")
+        ops = [row.op_combo.currentText() if row.op_combo else "" for row in self._rows]
         formula = parts[0]
         for i in range(1, len(parts)):
             formula = f"({formula} {ops[i]} {parts[i]})"
         self._formula_label.setText(f"Formula: {formula}")
 
     def get_config(self) -> CalculatedInput:
-        entries = [
-            CalculatedEntry(
-                input_name=inp_combo.currentText(),
-                operator=op_combo.currentText() if op_combo else "and",
-                above=(dir_combo.currentText() == "\u2265"),
-                threshold=thresh_spin.value(),
-                inverse=inv_check.isChecked(),
+        entries = []
+        for row in self._rows:
+            mode = row.dir_combo.currentText()
+            hyst = mode == _DIR_HYST
+            entries.append(
+                CalculatedEntry(
+                    input_name=row.inp_combo.currentText(),
+                    operator=row.op_combo.currentText() if row.op_combo else "and",
+                    above=(mode != _DIR_BELOW),
+                    threshold=row.thresh_spin.value(),
+                    inverse=row.inv_check.isChecked(),
+                    off_threshold=row.off_spin.value() if hyst else None,
+                )
             )
-            for _, op_combo, inv_check, inp_combo, dir_combo, thresh_spin in self._rows
-        ]
         return CalculatedInput(
             name=self._name_edit.text().strip(),
             enabled=self._enabled_check.isChecked(),
             entries=entries,
         )
+
+
+_DIR_ABOVE = "\u2265"  # ≥
+_DIR_BELOW = "<"
+_DIR_HYST = "hysteresis"
+
+
+def _op_spacer() -> QLabel:
+    spacer = QLabel("      ")
+    spacer.setFixedWidth(112)  # same width as the operator combo
+    return spacer
+
+
+@dataclass
+class _CalcRow:
+    widget: QWidget
+    op_combo: QComboBox | None
+    inv_check: QCheckBox
+    inp_combo: QComboBox
+    dir_combo: QComboBox
+    thresh_spin: QDoubleSpinBox
+    off_spin: QDoubleSpinBox
 
 
 # ---------------------------------------------------------------------------

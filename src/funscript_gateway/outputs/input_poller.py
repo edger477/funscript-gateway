@@ -92,7 +92,9 @@ def _evaluate_restim_condition(cond: RestimCondition, data: dict) -> bool:
 def _eval_calculated(inp: CalculatedInput, value_map: dict[str, float]) -> float:
     """Evaluate a CalculatedInput using left-to-right associativity.
 
-    Result is 100.0 (true) or 0.0 (false).
+    Result is 100.0 (true) or 0.0 (false). Entries with an off_threshold keep
+    their own hysteresis state between calls, so every entry is evaluated on
+    every call (no short-circuiting).
     The first entry has no operator; each subsequent entry's operator is
     applied between the accumulated result and the entry's value.
     """
@@ -103,6 +105,15 @@ def _eval_calculated(inp: CalculatedInput, value_map: dict[str, float]) -> float
         v = value_map.get(entry.input_name, 0.0)
         if entry.inverse:
             v = 100.0 - v
+        if entry.off_threshold is not None:
+            # Hysteresis: ON at >= threshold, OFF below off_threshold, hold between.
+            # An off_threshold above the on threshold degrades to a plain >=.
+            off = min(entry.off_threshold, entry.threshold)
+            if entry.state:
+                entry.state = v >= off
+            else:
+                entry.state = v >= entry.threshold
+            return entry.state
         return v >= entry.threshold if entry.above else v < entry.threshold
 
     result = _to_bool(inp.entries[0])

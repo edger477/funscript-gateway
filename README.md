@@ -169,9 +169,9 @@ Combines one or more non-calculated inputs using AND / OR / XOR, evaluated left-
 | Setting | Description |
 |---------|-------------|
 | **Name** | Input name |
-| **Entries** | At least 1 non-calculated input. First entry has no operator; subsequent entries specify AND / OR / XOR. Each entry also has a direction (≥ / <) and threshold (0–100) for the boolean conversion. |
+| **Entries** | At least 1 non-calculated input. First entry has no operator; subsequent entries specify AND / OR / XOR. Each entry also has a direction (≥ / < / hysteresis) and threshold (0–100) for the boolean conversion. **Hysteresis** takes two thresholds: the entry turns ON when the value reaches the *on* threshold and stays ON until it drops below the *off* threshold (e.g. on ≥ 60, off < 40), which stops it flickering around a single threshold. |
 
-The formula is shown live in the dialog, e.g. `(vibration ≥ 60.0 or restim < 30.0)`.
+The formula is shown live in the dialog, e.g. `(vibration ≥ 60.0 or restim < 30.0)` or `(as5311 [on ≥ 60.0, off < 40.0])`.
 
 ### Heart Rate (BLE)
 

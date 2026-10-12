@@ -147,6 +147,19 @@ def _restim_volume_input_from_dict(d: dict) -> RestimVolumeInput:
     )
 
 
+def _calculated_entry_to_dict(e: CalculatedEntry) -> dict:
+    d = {
+        "input_name": e.input_name,
+        "operator": e.operator,
+        "above": e.above,
+        "threshold": e.threshold,
+        "inverse": e.inverse,
+    }
+    if e.off_threshold is not None:  # TOML has no null; omit = no hysteresis
+        d["off_threshold"] = e.off_threshold
+    return d
+
+
 def _calculated_input_from_dict(d: dict) -> CalculatedInput:
     entries = [
         CalculatedEntry(
@@ -155,6 +168,9 @@ def _calculated_input_from_dict(d: dict) -> CalculatedInput:
             above=bool(e.get("above", True)),
             threshold=float(e.get("threshold", 50.0)),
             inverse=bool(e.get("inverse", False)),
+            off_threshold=(
+                float(e["off_threshold"]) if e.get("off_threshold") is not None else None
+            ),
         )
         for e in d.get("entries", [])
     ]
@@ -410,16 +426,7 @@ def _input_to_dict(inp) -> dict:
             "type": "calculated",
             "name": inp.name,
             "enabled": inp.enabled,
-            "entries": [
-                {
-                    "input_name": e.input_name,
-                    "operator": e.operator,
-                    "above": e.above,
-                    "threshold": e.threshold,
-                    "inverse": e.inverse,
-                }
-                for e in inp.entries
-            ],
+            "entries": [_calculated_entry_to_dict(e) for e in inp.entries],
         }
     if isinstance(inp, As5311Input):
         return {

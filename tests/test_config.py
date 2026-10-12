@@ -182,6 +182,23 @@ class TestConfigRoundTrip:
         assert calc.entries[1].operator == "or"
         assert calc.entries[1].above is False
         assert calc.entries[1].threshold == pytest.approx(30.0)
+        assert calc.entries[0].off_threshold is None
+        assert calc.entries[1].off_threshold is None
+
+    def test_calculated_hysteresis_round_trip(self):
+        cfg = GatewayConfig()
+        cfg.inputs = [
+            RestimInput(name="restim"),
+            CalculatedInput(
+                name="hyst",
+                entries=[
+                    CalculatedEntry(input_name="restim", threshold=60.0, off_threshold=40.0),
+                ],
+            ),
+        ]
+        entry = _roundtrip(cfg).inputs[1].entries[0]
+        assert entry.threshold == pytest.approx(60.0)
+        assert entry.off_threshold == pytest.approx(40.0)
 
     def test_as5311_input_round_trip(self):
         cfg = GatewayConfig()
