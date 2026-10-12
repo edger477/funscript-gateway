@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import logging
 import sys
+import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -38,6 +39,40 @@ def setup_logging(debug: bool = False) -> None:
 logger = logging.getLogger(__name__)
 
 
+def install_exception_logging() -> None:
+    """Route otherwise-unreported exceptions into the log file.
+
+    Exceptions raised in Qt slots, worker threads and asyncio callbacks are
+    by default only printed to stderr, which the packaged Windows exe and the
+    AppImage do not show.
+    """
+    def _sys_hook(exc_type, exc, tb) -> None:
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        logger.critical("Unhandled exception", exc_info=(exc_type, exc, tb))
+
+    def _thread_hook(args: threading.ExceptHookArgs) -> None:
+        if args.exc_type is SystemExit:
+            return
+        logger.error(
+            "Unhandled exception in thread %s",
+            args.thread.name if args.thread else "?",
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    sys.excepthook = _sys_hook
+    threading.excepthook = _thread_hook
+
+
+def _asyncio_exception_handler(loop, context: dict) -> None:
+    exc = context.get("exception")
+    logger.error(
+        "Unhandled asyncio error: %s", context.get("message", ""),
+        exc_info=(type(exc), exc, exc.__traceback__) if exc else None,
+    )
+
+
 async def async_main(app_state, player_manager, engine, output_manager, input_poller, data_logger) -> None:
     """Start all async components and keep running until cancelled."""
     await player_manager.start()
@@ -68,6 +103,7 @@ def main() -> None:
     args = parser.parse_args()
 
     setup_logging(debug=args.debug)
+    install_exception_logging()
     logger.info("funscript-gateway starting.")
 
     # Qt must be imported after logging setup.
@@ -89,6 +125,7 @@ def main() -> None:
 
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)
+    loop.set_exception_handler(_asyncio_exception_handler)
 
     # Build shared state.
     app_state = AppState()

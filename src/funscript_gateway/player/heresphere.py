@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 # state frames far more often during playback. Total silence for this long means
 # the link is dead (app closed, headset asleep, network dropped without a FIN).
 _IDLE_TIMEOUT_S = 10.0
+# State frames are a few hundred bytes. Anything far larger means the stream is
+# out of sync (or not HereSphere at all); reading it would allocate the claimed
+# length — up to 4 GiB — so treat it as a broken connection instead.
+_MAX_FRAME_BYTES = 1 * 1024 * 1024
 
 
 class HereSphereBackend:
@@ -81,22 +85,29 @@ class HereSphereBackend:
             length: int = struct.unpack("<I", header)[0]
             if length == 0:
                 continue
+            if length > _MAX_FRAME_BYTES:
+                raise ConnectionError(
+                    f"HereSphere frame length {length} exceeds {_MAX_FRAME_BYTES}; "
+                    "stream out of sync"
+                )
             data = await reader.readexactly(length)
             try:
                 payload = json.loads(data.decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 logger.warning("HereSphere: failed to parse payload: %s", exc)
                 continue
+            if not isinstance(payload, dict):
+                logger.warning("HereSphere: ignoring non-object payload: %r", payload)
+                continue
             self._handle_payload(payload)
 
     def _handle_payload(self, payload: dict) -> None:
         connection_state = self._derive_state(payload)
-        current_time_ms = int(payload.get("currentTime", 0.0) * 1000)
         state = PlayerState(
             connection_state=connection_state,
-            file_path=payload.get("path", "") or "",
-            current_time_ms=current_time_ms,
-            playback_speed=float(payload.get("playbackSpeed", 1.0)),
+            file_path=str(payload.get("path") or ""),
+            current_time_ms=int(_as_float(payload.get("currentTime"), 0.0) * 1000),
+            playback_speed=_as_float(payload.get("playbackSpeed"), 1.0),
         )
         self._on_state_change(state)
 
@@ -108,3 +119,11 @@ class HereSphereBackend:
         if payload.get("playerState") == 0:
             return MediaConnectionState.CONNECTED_AND_PLAYING
         return MediaConnectionState.CONNECTED_AND_PAUSED
+
+
+def _as_float(value, default: float) -> float:
+    """Coerce a JSON number to float; null or garbage yields ``default``."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default

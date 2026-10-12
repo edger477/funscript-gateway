@@ -29,20 +29,28 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _LOOP_INTERVAL_S = 0.1  # inner loop tick — actual poll rate governed per-input
+_LOG_ERROR_INTERVAL_S = 10.0
 
 _HR_MEASUREMENT_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 
 
-def _parse_hr_measurement(data: bytes) -> int:
-    """Parse GATT Heart Rate Measurement characteristic (0x2A37)."""
+def _parse_hr_measurement(data: bytes) -> int | None:
+    """Parse GATT Heart Rate Measurement characteristic (0x2A37).
+
+    Returns None for a packet too short to hold the value it declares.
+    """
+    if len(data) < 2:
+        return None
     flags = data[0]
     if flags & 0x01:  # 16-bit HR value
+        if len(data) < 3:
+            return None
         return int.from_bytes(data[1:3], "little")
     return data[1]  # 8-bit HR value
 
 
-def _fetch_json(url: str) -> dict:
-    with urllib.request.urlopen(url, timeout=3.0) as resp:  # noqa: S310
+def _fetch_json(url: str, timeout: float = 3.0) -> dict:
+    with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
         return json.loads(resp.read())
 
 
@@ -143,9 +151,11 @@ class InputPoller:
         self._app_state = app_state
         self._running = False
         self._task: asyncio.Task | None = None
-        self._last_poll: dict[str, float] = {}  # input name → last poll time
+        self._last_poll: dict[str, float] = {}  # input name → last poll start time
+        self._poll_tasks: dict[str, asyncio.Task] = {}  # input name → HTTP poll in flight
         self._ws_tasks: dict[str, asyncio.Task] = {}   # url → AS5311 WS task
         self._ble_tasks: dict[str, asyncio.Task] = {}  # address → BLE HR task
+        self._last_loop_error_log = float("-inf")
 
     async def start(self) -> None:
         self._running = True
@@ -153,17 +163,18 @@ class InputPoller:
 
     async def stop(self) -> None:
         self._running = False
-        for task in self._ws_tasks.values():
-            task.cancel()
-        for task in self._ble_tasks.values():
-            task.cancel()
-        if self._task is not None:
-            self._task.cancel()
-        tasks = list(self._ws_tasks.values()) + list(self._ble_tasks.values())
+        tasks = (
+            list(self._poll_tasks.values())
+            + list(self._ws_tasks.values())
+            + list(self._ble_tasks.values())
+        )
         if self._task is not None:
             tasks.append(self._task)
+        for task in tasks:
+            task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        self._poll_tasks.clear()
         self._ws_tasks.clear()
         self._ble_tasks.clear()
         self._task = None
@@ -171,63 +182,84 @@ class InputPoller:
     async def _loop(self) -> None:
         loop = asyncio.get_event_loop()
         while self._running:
-            now = loop.time()
-            for inp in list(self._app_state.inputs):
-                if isinstance(inp, RestimInput) and inp.enabled:
-                    last = self._last_poll.get(inp.name, -1e9)
-                    if now - last >= inp.poll_interval_s:
-                        await self._poll_restim(inp)
-                        self._last_poll[inp.name] = now
-                elif isinstance(inp, RestimVolumeInput) and inp.enabled:
-                    last = self._last_poll.get(inp.name, -1e9)
-                    if now - last >= inp.poll_interval_s:
-                        await self._poll_restim_volume(inp)
-                        self._last_poll[inp.name] = now
-                elif isinstance(inp, TasmotaInput) and inp.enabled:
-                    last = self._last_poll.get(inp.name, -1e9)
-                    if now - last >= inp.poll_interval_s:
-                        await self._poll_tasmota(inp)
-                        self._last_poll[inp.name] = now
-
-            # One WS task per unique URL (shared across inputs with the same endpoint)
-            active_urls = {
-                inp.url
-                for inp in self._app_state.inputs
-                if isinstance(inp, As5311Input) and inp.enabled
-            }
-            for url in active_urls:
-                task = self._ws_tasks.get(url)
-                if task is None or task.done():
-                    self._ws_tasks[url] = asyncio.ensure_future(
-                        self._ws_loop_as5311(url)
-                    )
-            for url in list(self._ws_tasks):
-                if url not in active_urls:
-                    self._ws_tasks.pop(url).cancel()
-
-            # One BLE task per unique device address
-            active_addresses = {
-                inp.device_address
-                for inp in self._app_state.inputs
-                if isinstance(inp, HeartRateInput) and inp.enabled and inp.device_address
-            }
-            for addr in active_addresses:
-                task = self._ble_tasks.get(addr)
-                if task is None or task.done():
-                    self._ble_tasks[addr] = asyncio.ensure_future(
-                        self._ble_loop_hr(addr)
-                    )
-            for addr in list(self._ble_tasks):
-                if addr not in active_addresses:
-                    self._ble_tasks.pop(addr).cancel()
-
-            self._evaluate_calculated()
+            try:
+                self._tick(loop.time())
+            except Exception:  # noqa: BLE001
+                # Never let one bad tick kill the loop; rate-limit the log.
+                now = loop.time()
+                if now - self._last_loop_error_log >= _LOG_ERROR_INTERVAL_S:
+                    self._last_loop_error_log = now
+                    logger.exception("Input poller error")
             await asyncio.sleep(_LOOP_INTERVAL_S)
+
+    def _tick(self, now: float) -> None:
+        # HTTP polls run as independent tasks so a slow or unreachable
+        # endpoint never delays the other inputs or calculated evaluation.
+        active_names: set[str] = set()
+        for inp in list(self._app_state.inputs):
+            if isinstance(inp, RestimInput):
+                poll = self._poll_restim
+            elif isinstance(inp, RestimVolumeInput):
+                poll = self._poll_restim_volume
+            elif isinstance(inp, TasmotaInput):
+                poll = self._poll_tasmota
+            else:
+                continue
+            if not inp.enabled:
+                continue
+            active_names.add(inp.name)
+            in_flight = self._poll_tasks.get(inp.name)
+            if in_flight is not None and not in_flight.done():
+                continue
+            last = self._last_poll.get(inp.name, -1e9)
+            if now - last >= inp.poll_interval_s:
+                self._last_poll[inp.name] = now
+                self._poll_tasks[inp.name] = asyncio.ensure_future(poll(inp))
+        for name in list(self._poll_tasks):
+            if name not in active_names:
+                self._poll_tasks.pop(name).cancel()
+        for name in list(self._last_poll):
+            if name not in active_names:
+                del self._last_poll[name]
+
+        # One WS task per unique URL (shared across inputs with the same endpoint)
+        active_urls = {
+            inp.url
+            for inp in self._app_state.inputs
+            if isinstance(inp, As5311Input) and inp.enabled
+        }
+        for url in active_urls:
+            task = self._ws_tasks.get(url)
+            if task is None or task.done():
+                self._ws_tasks[url] = asyncio.ensure_future(
+                    self._ws_loop_as5311(url)
+                )
+        for url in list(self._ws_tasks):
+            if url not in active_urls:
+                self._ws_tasks.pop(url).cancel()
+
+        # One BLE task per unique device address
+        active_addresses = {
+            inp.device_address
+            for inp in self._app_state.inputs
+            if isinstance(inp, HeartRateInput) and inp.enabled and inp.device_address
+        }
+        for addr in active_addresses:
+            task = self._ble_tasks.get(addr)
+            if task is None or task.done():
+                self._ble_tasks[addr] = asyncio.ensure_future(
+                    self._ble_loop_hr(addr)
+                )
+        for addr in list(self._ble_tasks):
+            if addr not in active_addresses:
+                self._ble_tasks.pop(addr).cancel()
+
+        self._evaluate_calculated()
 
     async def _poll_tasmota(self, inp: TasmotaInput) -> None:
         url = f"http://{inp.host}/cm?cmnd=Power{inp.device_index}"
         try:
-            data = await asyncio.to_thread(_fetch_json, url)
+            data = await asyncio.to_thread(_fetch_json, url, inp.timeout_s)
             key = f"POWER{inp.device_index}"
             state_str = data.get(key) or data.get("POWER", "OFF")
             inp.current_value = 100.0 if str(state_str).upper() == "ON" else 0.0
@@ -294,8 +326,13 @@ class InputPoller:
                     async for message in ws:
                         if not self._running:
                             return
-                        data = json.loads(message)
-                        x_m = float(data.get("x", 0.0))
+                        try:
+                            data = json.loads(message)
+                            x_m = float(data.get("x", 0.0))
+                        except (ValueError, TypeError, AttributeError) as exc:
+                            # One malformed message is not a reason to reconnect.
+                            logger.debug("AS5311 '%s': bad message %r: %s", url, message, exc)
+                            continue
                         x_mm = x_m * 1000.0
                         for inp in self._as5311_inputs_for_url(url):
                             inp.last_position_mm = x_mm
@@ -343,6 +380,9 @@ class InputPoller:
 
                     def _on_hr(characteristic, data: bytearray) -> None:  # noqa: ARG001
                         bpm = _parse_hr_measurement(bytes(data))
+                        if bpm is None:
+                            logger.debug("HeartRate: ignoring short packet %r", bytes(data))
+                            return
                         for inp in self._hr_inputs_for_address(address):
                             inp.current_bpm = bpm
                             span = inp.scale_max_bpm - inp.scale_min_bpm

@@ -73,6 +73,20 @@ def _input_type_key(inp) -> str:
     return "unknown"
 
 
+def _run_dialog(dlg: QDialog):
+    """Run a config dialog; return its config if accepted, else None.
+
+    Dialogs are parented to the tab, so without an explicit deleteLater every
+    Add/Edit would leave a dead dialog alive until the app exits.
+    """
+    try:
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dlg.get_config()
+    finally:
+        dlg.deleteLater()
+
+
 class InputsTab(QWidget):
     def __init__(self, app_state, engine, parent=None) -> None:
         super().__init__(parent)
@@ -127,7 +141,9 @@ class InputsTab(QWidget):
 
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         app_state.inputs_updated.connect(self._on_inputs_updated)
-        app_state.outputs_updated.connect(self._refresh_values)
+        # Output edits change the "Used In" column. Live values are refreshed
+        # by MainWindow's UI timer via refresh_values().
+        app_state.outputs_updated.connect(self._on_outputs_updated)
 
         # Populate from already-loaded config (inputs_updated is not emitted at startup)
         if app_state.inputs:
@@ -175,6 +191,9 @@ class InputsTab(QWidget):
 
     def _on_inputs_updated(self, inputs: list) -> None:
         self._rebuild_table(inputs)
+
+    def _on_outputs_updated(self) -> None:
+        self._rebuild_table(self._app_state.inputs)
 
     def _on_selection_changed(self) -> None:
         rows = sorted({idx.row() for idx in self._table.selectedIndexes()})
@@ -345,7 +364,7 @@ class InputsTab(QWidget):
             used_item.setToolTip(f"Referenced by {used} output(s)/input(s)")
         self._table.setItem(row, _COL_USED_IN, used_item)
 
-    def _refresh_values(self) -> None:
+    def refresh_values(self) -> None:
         """Update value bars without rebuilding the whole table (called at 20 Hz)."""
         inputs = self._app_state.inputs
         for row, inp in enumerate(inputs):
@@ -445,13 +464,13 @@ class InputsTab(QWidget):
         btn = self.sender()
         pos = btn.mapToGlobal(btn.rect().bottomLeft()) if btn else self.cursor().pos()
         menu.exec(pos)
+        menu.deleteLater()
 
     def _add_funscript_axis(self) -> None:
         from funscript_gateway.ui.input_dialogs import FunscriptAxisDialog
-        dlg = FunscriptAxisDialog(parent=self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        inp = _run_dialog(FunscriptAxisDialog(parent=self))
+        if inp is None:
             return
-        inp = dlg.get_config()
         if not inp.name:
             QMessageBox.warning(self, "Invalid", "Axis name cannot be empty.")
             return
@@ -459,10 +478,9 @@ class InputsTab(QWidget):
 
     def _add_restim(self) -> None:
         from funscript_gateway.ui.input_dialogs import RestimDialog
-        dlg = RestimDialog(parent=self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        inp = _run_dialog(RestimDialog(parent=self))
+        if inp is None:
             return
-        inp = dlg.get_config()
         if not inp.name:
             QMessageBox.warning(self, "Invalid", "Input name cannot be empty.")
             return
@@ -470,10 +488,9 @@ class InputsTab(QWidget):
 
     def _add_restim_volume(self) -> None:
         from funscript_gateway.ui.input_dialogs import RestimVolumeDialog
-        dlg = RestimVolumeDialog(parent=self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        inp = _run_dialog(RestimVolumeDialog(parent=self))
+        if inp is None:
             return
-        inp = dlg.get_config()
         if not inp.name:
             QMessageBox.warning(self, "Invalid", "Input name cannot be empty.")
             return
@@ -481,10 +498,9 @@ class InputsTab(QWidget):
 
     def _add_as5311(self) -> None:
         from funscript_gateway.ui.input_dialogs import As5311Dialog
-        dlg = As5311Dialog(parent=self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        inp = _run_dialog(As5311Dialog(parent=self))
+        if inp is None:
             return
-        inp = dlg.get_config()
         if not inp.name:
             QMessageBox.warning(self, "Invalid", "Input name cannot be empty.")
             return
@@ -492,10 +508,9 @@ class InputsTab(QWidget):
 
     def _add_tasmota(self) -> None:
         from funscript_gateway.ui.input_dialogs import TasmotaInputDialog
-        dlg = TasmotaInputDialog(parent=self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        inp = _run_dialog(TasmotaInputDialog(parent=self))
+        if inp is None:
             return
-        inp = dlg.get_config()
         if not inp.name:
             QMessageBox.warning(self, "Invalid", "Input name cannot be empty.")
             return
@@ -503,10 +518,9 @@ class InputsTab(QWidget):
 
     def _add_heart_rate(self) -> None:
         from funscript_gateway.ui.input_dialogs import HeartRateInputDialog
-        dlg = HeartRateInputDialog(parent=self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        inp = _run_dialog(HeartRateInputDialog(parent=self))
+        if inp is None:
             return
-        inp = dlg.get_config()
         if not inp.name:
             QMessageBox.warning(self, "Invalid", "Input name cannot be empty.")
             return
@@ -521,10 +535,9 @@ class InputsTab(QWidget):
             )
             return
         from funscript_gateway.ui.input_dialogs import ArithmeticDialog
-        dlg = ArithmeticDialog(available_inputs=available, parent=self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        inp = _run_dialog(ArithmeticDialog(available_inputs=available, parent=self))
+        if inp is None:
             return
-        inp = dlg.get_config()
         if not inp.name:
             QMessageBox.warning(self, "Invalid", "Input name cannot be empty.")
             return
@@ -542,10 +555,9 @@ class InputsTab(QWidget):
             )
             return
         from funscript_gateway.ui.input_dialogs import CalculatedDialog
-        dlg = CalculatedDialog(available_inputs=non_calc, parent=self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        inp = _run_dialog(CalculatedDialog(available_inputs=non_calc, parent=self))
+        if inp is None:
             return
-        inp = dlg.get_config()
         if not inp.name:
             QMessageBox.warning(self, "Invalid", "Input name cannot be empty.")
             return
@@ -557,10 +569,9 @@ class InputsTab(QWidget):
     def _edit_arithmetic(self, row: int, inp: ArithmeticInput) -> None:
         available = self._non_arithmetic_names()
         from funscript_gateway.ui.input_dialogs import ArithmeticDialog
-        dlg = ArithmeticDialog(available_inputs=available, config=inp, parent=self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+        new_inp = _run_dialog(ArithmeticDialog(available_inputs=available, config=inp, parent=self))
+        if new_inp is None:
             return
-        new_inp = dlg.get_config()
         if not new_inp.entries:
             QMessageBox.warning(self, "Invalid", "An arithmetic input needs at least 1 entry.")
             return
@@ -582,10 +593,9 @@ class InputsTab(QWidget):
 
         if isinstance(inp, FunscriptAxisInput):
             from funscript_gateway.ui.input_dialogs import FunscriptAxisDialog
-            dlg = FunscriptAxisDialog(config=inp, parent=self)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
+            new_inp = _run_dialog(FunscriptAxisDialog(config=inp, parent=self))
+            if new_inp is None:
                 return
-            new_inp = dlg.get_config()
             new_inp.file_path = inp.file_path
             new_inp.actions = inp.actions
             new_inp.current_value = inp.current_value
@@ -594,18 +604,16 @@ class InputsTab(QWidget):
 
         elif isinstance(inp, RestimInput):
             from funscript_gateway.ui.input_dialogs import RestimDialog
-            dlg = RestimDialog(config=inp, parent=self)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
+            new_inp = _run_dialog(RestimDialog(config=inp, parent=self))
+            if new_inp is None:
                 return
-            new_inp = dlg.get_config()
             self._replace_input(row, inp, new_inp)
 
         elif isinstance(inp, RestimVolumeInput):
             from funscript_gateway.ui.input_dialogs import RestimVolumeDialog
-            dlg = RestimVolumeDialog(config=inp, parent=self)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
+            new_inp = _run_dialog(RestimVolumeDialog(config=inp, parent=self))
+            if new_inp is None:
                 return
-            new_inp = dlg.get_config()
             self._replace_input(row, inp, new_inp)
 
         elif isinstance(inp, ArithmeticInput):
@@ -615,10 +623,9 @@ class InputsTab(QWidget):
         elif isinstance(inp, CalculatedInput):
             non_calc = self._primary_input_names()
             from funscript_gateway.ui.input_dialogs import CalculatedDialog
-            dlg = CalculatedDialog(available_inputs=non_calc, config=inp, parent=self)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
+            new_inp = _run_dialog(CalculatedDialog(available_inputs=non_calc, config=inp, parent=self))
+            if new_inp is None:
                 return
-            new_inp = dlg.get_config()
             if not new_inp.entries:
                 QMessageBox.warning(self, "Invalid", "A calculated input needs at least 1 entry.")
                 return
@@ -626,26 +633,23 @@ class InputsTab(QWidget):
 
         elif isinstance(inp, As5311Input):
             from funscript_gateway.ui.input_dialogs import As5311Dialog
-            dlg = As5311Dialog(config=inp, parent=self)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
+            new_inp = _run_dialog(As5311Dialog(config=inp, parent=self))
+            if new_inp is None:
                 return
-            new_inp = dlg.get_config()
             self._replace_input(row, inp, new_inp)
 
         elif isinstance(inp, TasmotaInput):
             from funscript_gateway.ui.input_dialogs import TasmotaInputDialog
-            dlg = TasmotaInputDialog(config=inp, parent=self)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
+            new_inp = _run_dialog(TasmotaInputDialog(config=inp, parent=self))
+            if new_inp is None:
                 return
-            new_inp = dlg.get_config()
             self._replace_input(row, inp, new_inp)
 
         elif isinstance(inp, HeartRateInput):
             from funscript_gateway.ui.input_dialogs import HeartRateInputDialog
-            dlg = HeartRateInputDialog(config=inp, parent=self)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
+            new_inp = _run_dialog(HeartRateInputDialog(config=inp, parent=self))
+            if new_inp is None:
                 return
-            new_inp = dlg.get_config()
             self._replace_input(row, inp, new_inp)
 
     def _replace_input(self, row: int, old_inp, new_inp) -> None:

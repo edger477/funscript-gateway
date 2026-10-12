@@ -236,3 +236,40 @@ class TestReadLoopIdleTimeout:
 
         assert len(states) == 1
         assert states[0].current_time_ms == 9000
+
+
+class TestReadLoopHardening:
+    @staticmethod
+    def _frame(body: bytes) -> bytes:
+        return struct.pack("<I", len(body)) + body
+
+    @pytest.mark.asyncio
+    async def test_oversized_frame_length_raises_instead_of_allocating(self):
+        from funscript_gateway.player import heresphere
+
+        backend, _ = make_backend()
+        reader = asyncio.StreamReader()
+        reader.feed_data(struct.pack("<I", heresphere._MAX_FRAME_BYTES + 1))
+        with pytest.raises(ConnectionError):
+            await asyncio.wait_for(backend._read_loop(reader), timeout=1.0)
+
+    @pytest.mark.asyncio
+    async def test_non_object_payload_is_skipped(self):
+        import json as _json
+
+        backend, states = make_backend()
+        good = _json.dumps({"playerState": 0, "currentTime": 1.0, "path": "/v.mp4"}).encode()
+        reader = asyncio.StreamReader()
+        reader.feed_data(self._frame(b"[1, 2]") + self._frame(b"null") + self._frame(good))
+        reader.feed_eof()
+        with pytest.raises(asyncio.IncompleteReadError):
+            await asyncio.wait_for(backend._read_loop(reader), timeout=1.0)
+        assert len(states) == 1
+
+    def test_null_current_time_and_speed_use_defaults(self):
+        backend, states = make_backend()
+        backend._handle_payload(
+            {"playerState": 0, "currentTime": None, "playbackSpeed": None, "path": "/v.mp4"}
+        )
+        assert states[0].current_time_ms == 0
+        assert states[0].playback_speed == 1.0

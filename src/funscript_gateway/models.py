@@ -276,3 +276,7 @@ class OutputInstance:
         self.last_output_state: bool = False
         self.consecutive_errors: int = 0
         self.is_degraded: bool = False
+        # Runtime send bookkeeping (owned by OutputManager).
+        self.send_task: object | None = None      # asyncio.Task in flight, if any
+        self.pending_state: bool | None = None    # latest state to deliver
+        self.retry_at: float = 0.0                # loop time before which sends are skipped

@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-import asyncio
+from funscript_gateway.tasks import spawn
 
 from funscript_gateway.models import (
     ArithmeticEntry,
@@ -872,7 +872,15 @@ class HeartRateInputDialog(QDialog):
         self._results_combo.clear()
         self._results_combo.show()
         self._results_label.hide()
-        asyncio.ensure_future(self._do_scan())
+        self._scan_task = spawn(self._do_scan(), "BLE heart-rate scan")
+
+    def done(self, result: int) -> None:
+        # Stop a running scan when the dialog closes; the dialog is deleted
+        # right after, and the scan must not touch its widgets afterwards.
+        task = getattr(self, "_scan_task", None)
+        if task is not None and not task.done():
+            task.cancel()
+        super().done(result)
 
     async def _do_scan(self) -> None:
         _HR_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb"

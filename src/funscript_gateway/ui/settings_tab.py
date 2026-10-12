@@ -233,14 +233,14 @@ class SettingsTab(QWidget):
             logger.error("Failed to save config: %s", exc)
 
         # Restart player manager if connection settings changed.
-        import asyncio
+        from funscript_gateway.tasks import spawn
         player_settings_changed = (
             cfg.type != old_type
             or cfg.host != old_host
             or cfg.port != old_port
         )
         if player_settings_changed and self._player_manager is not None:
-            asyncio.ensure_future(self._restart_player())
+            spawn(self._restart_player(), "restart player")
 
         # Restart data logger if its settings changed.
         logging_settings_changed = (
@@ -248,7 +248,7 @@ class SettingsTab(QWidget):
             or dl.interval_s != old_logging_interval
         )
         if logging_settings_changed and self._data_logger is not None:
-            asyncio.ensure_future(self._data_logger.restart())
+            spawn(self._data_logger.restart(), "restart data logger")
 
     async def _restart_player(self) -> None:
         await self._player_manager.stop()

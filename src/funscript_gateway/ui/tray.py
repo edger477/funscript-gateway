@@ -48,7 +48,9 @@ class SystemTrayIcon(QSystemTrayIcon):
         app_state.player_state_changed.connect(self._on_player_state_changed)
 
     def _build_menu(self) -> None:
-        menu = QMenu()
+        # setContextMenu does not take ownership; keep a reference so the
+        # menu is not garbage-collected out from under the tray icon.
+        self._menu = menu = QMenu()
         open_action = QAction("Open funscript-gateway", self)
         open_action.triggered.connect(self._show_window)
         menu.addAction(open_action)

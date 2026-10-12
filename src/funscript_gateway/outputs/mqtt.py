@@ -85,14 +85,18 @@ class MqttDriver:
         await asyncio.to_thread(self._do_connect)
 
     def _do_connect(self) -> None:
-        self._client.connect(
-            self.config.broker_host,
-            port=self.config.broker_port,
-            keepalive=60,
-        )
+        try:
+            self._client.connect(
+                self.config.broker_host,
+                port=self.config.broker_port,
+                keepalive=60,
+            )
+        except Exception:
+            self._do_disconnect()  # release any half-open socket
+            raise
         self._client.loop_start()
         if not self._connected_event.wait(timeout=10.0):
-            self._client.loop_stop()
+            self._do_disconnect()
             raise ConnectionError(
                 f"MQTT broker {self.config.broker_host}:{self.config.broker_port} "
                 "did not respond within 10 s"
@@ -123,8 +127,16 @@ class MqttDriver:
         await asyncio.to_thread(self._do_disconnect)
 
     def _do_disconnect(self) -> None:
-        try:
-            self._client.loop_stop()
-            self._client.disconnect()
-        except Exception:  # noqa: BLE001
-            pass
+        # Each step separately, so a failing loop_stop still closes the socket.
+        for step in (self._client.loop_stop, self._client.disconnect, self._close_socket):
+            try:
+                step()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _close_socket(self) -> None:
+        # disconnect() only queues a DISCONNECT packet; with the network loop
+        # stopped nothing would close a socket left open by a failed handshake.
+        sock = self._client.socket()
+        if sock is not None:
+            sock.close()
